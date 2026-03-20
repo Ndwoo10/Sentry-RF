@@ -7,6 +7,7 @@
 #include "rf_scanner.h"
 #include "gps_manager.h"
 #include "gnss_integrity.h"
+#include "compass.h"
 
 enum ThreatLevel : uint8_t {
     THREAT_CLEAR    = 0,
@@ -26,6 +27,7 @@ struct SystemState {
     ThreatLevel     threatLevel;
     bool            wifiScannerActive;
     bool            dashboardActive;
+    CompassData     compass;
     unsigned long   lastSweepMs;
     unsigned long   lastGpsMs;
 };

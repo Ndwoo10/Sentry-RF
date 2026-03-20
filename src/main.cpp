@@ -10,6 +10,7 @@
 #include "rf_scanner.h"
 #include "gps_manager.h"
 #include "gnss_integrity.h"
+#include "compass.h"
 #include "display.h"
 #include "detection_engine.h"
 #include "data_logger.h"
@@ -154,27 +155,44 @@ static void loRaScanTask(void* param) {
 static void gpsReadTask(void* param) {
     GpsData localGps = {};
     IntegrityStatus localIntegrity = {};
+    CompassData localCompass = {};
+    localCompass.scaleX = localCompass.scaleY = localCompass.scaleZ = 1.0f;
+    localCompass.peakRSSI = -200.0f;
 
     for (;;) {
-        // Drain UART every iteration — this is the whole reason GPS gets its own core
         gpsProcess();
 
-        // Read and analyze at 1 Hz (rate-limited inside gpsUpdate)
         gpsUpdate(localGps);
         integrityUpdate(localGps, localIntegrity);
+
+        // Compass on Wire1 — different bus from OLED, no contention
+        compassRead(localCompass);
+        if (compassIsCalibrating()) compassCalibrationTick(localCompass);
+
+        // Track peak bearing using current strongest sub-GHz signal
+        float peakRSSI = -200.0;
+        if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+            peakRSSI = systemState.spectrum.peakRSSI;
+            xSemaphoreGive(stateMutex);
+        }
+        compassUpdatePeakBearing(localCompass, peakRSSI);
 
         // Copy to shared state under lock
         if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
             systemState.gps = localGps;
             systemState.integrity = localIntegrity;
+            systemState.compass = localCompass;
             systemState.lastGpsMs = millis();
             xSemaphoreGive(stateMutex);
         }
 
-        // Print outside state lock but inside serial lock to prevent garbling
+        // Print outside state lock but inside serial lock
         if (localGps.valid && xSemaphoreTake(serialMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
             gpsPrintStatus(localGps);
             integrityPrintStatus(localIntegrity, localGps);
+            if (localCompass.valid) {
+                Serial.printf("[COMPASS] HDG:%.0f° %s\n", localCompass.heading, localCompass.directionStr);
+            }
             xSemaphoreGive(serialMutex);
         }
 
@@ -196,6 +214,7 @@ static void displayTask(void* param) {
     bool buttonWasDown = false;
     unsigned long buttonDownMs = 0;
     bool dashboardMode = false;
+    unsigned long lastShortPressMs = 0;  // for double-press calibration detection
 
     for (;;) {
         bool buttonDown = (digitalRead(PIN_BOOT) == LOW);
@@ -239,13 +258,24 @@ static void displayTask(void* param) {
         } else {
             if (buttonWasDown && !dashboardMode) {
                 unsigned long held = millis() - buttonDownMs;
-                // Short press: advance screen
                 if (held < 1000) {
-                    currentScreen = (currentScreen + 1) % NUM_SCREENS;
-                    lastAdvanceMs = millis();
-                    if (xSemaphoreTake(serialMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-                        Serial.printf("[UI] Button press — screen %d\n", currentScreen);
-                        xSemaphoreGive(serialMutex);
+                    // Double-press within 500ms: toggle compass calibration
+                    if (millis() - lastShortPressMs < 500) {
+                        compassStartCalibration();
+                        if (xSemaphoreTake(serialMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+                            Serial.println("[UI] Double-press — calibration toggle");
+                            xSemaphoreGive(serialMutex);
+                        }
+                        lastShortPressMs = 0;
+                    } else {
+                        // Single press: advance screen
+                        currentScreen = (currentScreen + 1) % NUM_SCREENS;
+                        lastAdvanceMs = millis();
+                        lastShortPressMs = millis();
+                        if (xSemaphoreTake(serialMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+                            Serial.printf("[UI] Button press — screen %d\n", currentScreen);
+                            xSemaphoreGive(serialMutex);
+                        }
                     }
                 }
             }
@@ -265,8 +295,22 @@ static void displayTask(void* param) {
         }
 
         if (!dashboardMode) {
-            // Normal mode: render OLED screens
-            screens[currentScreen](oled, local, currentScreen);
+            if (compassIsCalibrating()) {
+                // Calibration overlay replaces normal screen
+                unsigned long elapsed = (millis() - local.compass.peakTimestamp);
+                oled.clearDisplay();
+                oled.setTextSize(1);
+                oled.setTextColor(SSD1306_WHITE);
+                oled.setCursor(10, 8);
+                oled.println("CALIBRATING");
+                oled.setCursor(10, 24);
+                oled.println("Rotate 360 degrees");
+                oled.setCursor(10, 44);
+                oled.println("Double-press to stop");
+                oled.display();
+            } else {
+                screens[currentScreen](oled, local, currentScreen);
+            }
         } else {
             // Dashboard mode: serve HTTP + show status on OLED
             dashboardUpdateState(local);
@@ -342,6 +386,9 @@ void setup() {
     wifiScannerInit();
 
     initCompassBus();
+    if (!compassInit()) {
+        Serial.println("[COMPASS] Not detected — continuing without compass");
+    }
 
     // Create FreeRTOS primitives
     stateMutex = xSemaphoreCreateMutex();
