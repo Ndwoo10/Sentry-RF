@@ -155,6 +155,12 @@ void screenGPS(Adafruit_SSD1306& disp, const SystemState& state, int page) {
         disp.printf("Alt:%dm  pDOP:%.1f", g.altMM / 1000, g.pDOP / 100.0);
         disp.setCursor(0, 36);
         disp.printf("hAcc:%dm vAcc:%dm", g.hAccMM / 1000, g.vAccMM / 1000);
+        disp.setCursor(0, 48);
+        if (state.compass.valid) {
+            disp.printf("HDG: %.0f%c %s", state.compass.heading, 0xF8, state.compass.directionStr);
+        } else {
+            disp.print("HDG: --");
+        }
     }
 
     drawPageDots(disp, page, NUM_SCREENS);
@@ -216,6 +222,14 @@ void screenThreat(Adafruit_SSD1306& disp, const SystemState& state, int page) {
                 jammingStr(state.gps.jammingState),
                 spoofStr(state.gps.spoofDetState));
 
+    disp.setCursor(0, 50);
+    if (state.compass.valid && state.compass.peakRSSI > -200.0 &&
+        (millis() - state.compass.peakTimestamp < 30000)) {
+        disp.printf("Bearing: %.0f%c", state.compass.peakBearing, 0xF8);
+    } else {
+        disp.print("Bearing: --");
+    }
+
     drawPageDots(disp, page, NUM_SCREENS);
     disp.display();
 }
@@ -244,13 +258,13 @@ void screenSystem(Adafruit_SSD1306& disp, const SystemState& state, int page) {
     disp.printf("Heap: %u bytes", ESP.getFreeHeap());
 
     disp.setCursor(0, 48);
-#if defined(BOARD_T3S3_LR1121)
-    disp.print("Board: T3S3 LR1121");
-#elif defined(BOARD_T3S3)
-    disp.print("Board: LilyGo T3S3");
-#elif defined(BOARD_HELTEC_V3)
-    disp.print("Board: Heltec V3");
-#endif
+    if (compassIsCalibrating()) {
+        disp.print("Compass: CAL...");
+    } else if (state.compass.valid) {
+        disp.print("Compass: OK");
+    } else {
+        disp.print("Compass: N/A");
+    }
 
     drawPageDots(disp, page, NUM_SCREENS);
     disp.display();
