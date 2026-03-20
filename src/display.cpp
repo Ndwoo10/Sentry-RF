@@ -84,7 +84,9 @@ void displayBootSplash(Adafruit_SSD1306& disp) {
     disp.setCursor(0, 0);
     disp.printf("%s v%s", FW_NAME, FW_VERSION);
     disp.setCursor(0, 16);
-#ifdef BOARD_T3S3
+#if defined(BOARD_T3S3_LR1121)
+    disp.println("Board: T3S3 LR1121");
+#elif defined(BOARD_T3S3)
     disp.println("Board: T3S3");
 #elif defined(BOARD_HELTEC_V3)
     disp.println("Board: Heltec V3");
@@ -242,7 +244,9 @@ void screenSystem(Adafruit_SSD1306& disp, const SystemState& state, int page) {
     disp.printf("Heap: %u bytes", ESP.getFreeHeap());
 
     disp.setCursor(0, 48);
-#ifdef BOARD_T3S3
+#if defined(BOARD_T3S3_LR1121)
+    disp.print("Board: T3S3 LR1121");
+#elif defined(BOARD_T3S3)
     disp.print("Board: LilyGo T3S3");
 #elif defined(BOARD_HELTEC_V3)
     disp.print("Board: Heltec V3");

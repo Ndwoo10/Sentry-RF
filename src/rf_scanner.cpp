@@ -2,15 +2,82 @@
 #include "board_config.h"
 #include <Arduino.h>
 
+// ── Sub-GHz scanner (SX1262 and LR1121) ────────────────────────────────────
+
+#ifdef BOARD_T3S3_LR1121
+
+int scannerInit(LR1121& radio) {
+    // LR1121 uses GFSK, not FSK — different RadioLib method name, same result
+    int state = radio.beginGFSK(4.8, 5.0, 234.3, 16, 1.8);
+    if (state != RADIOLIB_ERR_NONE) {
+        Serial.printf("[SCAN] GFSK init failed: %d\n", state);
+        return state;
+    }
+
+    state = radio.setRxBoostedGainMode(true);
+    if (state != RADIOLIB_ERR_NONE) {
+        Serial.printf("[SCAN] Rx boost failed: %d\n", state);
+    }
+
+    Serial.printf("[SCAN] GFSK mode ready (LR1121), %d bins, %.1f–%.1f MHz\n",
+                  SCAN_BIN_COUNT, SCAN_FREQ_START, SCAN_FREQ_END);
+    return RADIOLIB_ERR_NONE;
+}
+
+void scannerSweep(LR1121& radio, ScanResult& result) {
+    unsigned long startTime = millis();
+    result.peakRSSI = -200.0;
+    result.peakFreq = SCAN_FREQ_START;
+
+    for (int i = 0; i < SCAN_BIN_COUNT; i++) {
+        float freq = SCAN_FREQ_START + (i * SCAN_FREQ_STEP);
+        radio.setFrequency(freq);
+        delayMicroseconds(SCAN_DWELL_US);
+
+        // LR11x0 getRSSI() takes no arguments (always instantaneous)
+        result.rssi[i] = radio.getRSSI();
+
+        if (result.rssi[i] > result.peakRSSI) {
+            result.peakRSSI = result.rssi[i];
+            result.peakFreq = freq;
+        }
+    }
+
+    result.sweepTimeMs = millis() - startTime;
+}
+
+// 2.4 GHz sweep — LR1121 handles band switching transparently via setFrequency()
+void scannerSweep24(LR1121& radio, ScanResult24& result) {
+    unsigned long startTime = millis();
+    result.peakRSSI = -200.0;
+    result.peakFreq = SCAN_24_START;
+    result.valid = true;
+
+    for (int i = 0; i < SCAN_24_BIN_COUNT; i++) {
+        float freq = SCAN_24_START + (i * SCAN_24_STEP);
+        radio.setFrequency(freq);
+        delayMicroseconds(SCAN_DWELL_US);
+
+        result.rssi[i] = radio.getRSSI();
+
+        if (result.rssi[i] > result.peakRSSI) {
+            result.peakRSSI = result.rssi[i];
+            result.peakFreq = freq;
+        }
+    }
+
+    result.sweepTimeMs = millis() - startTime;
+}
+
+#else // SX1262 boards
+
 int scannerInit(SX1262& radio) {
-    // FSK mode gives us per-frequency RSSI — LoRa mode can't tune arbitrarily
     int state = radio.beginFSK();
     if (state != RADIOLIB_ERR_NONE) {
         Serial.printf("[SCAN] FSK init failed: %d\n", state);
         return state;
     }
 
-    // LNA boost improves sensitivity ~2 dB at cost of ~1 mA extra current
     state = radio.setRxBoostedGainMode(true);
     if (state != RADIOLIB_ERR_NONE) {
         Serial.printf("[SCAN] Rx boost failed: %d\n", state);
@@ -42,8 +109,10 @@ void scannerSweep(SX1262& radio, ScanResult& result) {
     result.sweepTimeMs = millis() - startTime;
 }
 
-// Only print bins with real signals — dumping 700 noise-floor lines per sweep
-// floods serial and buries actual detections once GPS data joins in Sprint 3
+#endif // BOARD_T3S3_LR1121
+
+// ── Print helpers (radio-independent) ───────────────────────────────────────
+
 static const float CSV_NOISE_FLOOR = -110.0;
 
 void scannerPrintCSV(const ScanResult& result) {

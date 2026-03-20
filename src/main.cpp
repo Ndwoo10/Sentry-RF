@@ -14,11 +14,16 @@
 #include "detection_engine.h"
 #include "data_logger.h"
 #include "wifi_dashboard.h"
+#include "wifi_scanner.h"
 #include "alert_handler.h"
 
 // Hardware objects — each owned by exactly one task after setup()
 SPIClass loraSPI(HSPI);
+#ifdef BOARD_T3S3_LR1121
+LR1121 radio = new Module(PIN_LORA_CS, PIN_LORA_DIO1, PIN_LORA_RST, PIN_LORA_BUSY, loraSPI);
+#else
 SX1262 radio = new Module(PIN_LORA_CS, PIN_LORA_DIO1, PIN_LORA_RST, PIN_LORA_BUSY, loraSPI);
+#endif
 Adafruit_SSD1306 oled(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, PIN_OLED_RST);
 
 // FreeRTOS shared state — copy under lock, process outside lock
@@ -32,12 +37,15 @@ static TaskHandle_t hLoRaTask    = nullptr;
 static TaskHandle_t hGPSTask     = nullptr;
 static TaskHandle_t hDisplayTask = nullptr;
 static TaskHandle_t hAlertTask   = nullptr;
+static TaskHandle_t hWiFiTask    = nullptr;
 
 // ── Hardware init (runs once in setup on Core 1) ────────────────────────────
 
 static int initRadioHardware() {
     loraSPI.begin(PIN_LORA_SCK, PIN_LORA_MISO, PIN_LORA_MOSI, PIN_LORA_CS);
 
+    // Heltec SX1262 needs TCXO set before beginFSK — LR1121 handles it in beginGFSK
+#ifndef BOARD_T3S3_LR1121
     if (HAS_TCXO) {
         int tcxoState = radio.setTCXO(1.8);
         if (tcxoState != RADIOLIB_ERR_NONE) {
@@ -45,12 +53,13 @@ static int initRadioHardware() {
             return tcxoState;
         }
     }
+#endif
 
     return RADIOLIB_ERR_NONE;
 }
 
 static void initCompassBus() {
-#ifdef BOARD_T3S3
+#if defined(BOARD_T3S3) || defined(BOARD_T3S3_LR1121)
     if (HAS_COMPASS) {
         Wire1.begin(PIN_COMPASS_SDA, PIN_COMPASS_SCL);
         Serial.printf("[I2C1] Compass bus on SDA=%d SCL=%d\n",
@@ -67,6 +76,8 @@ static void printBanner() {
     Serial.println(" Board: LilyGo T3S3");
 #elif defined(BOARD_HELTEC_V3)
     Serial.println(" Board: Heltec V3");
+#elif defined(BOARD_T3S3_LR1121)
+    Serial.println(" Board: T3S3 LR1121");
 #endif
     Serial.println(" Mode:  FreeRTOS dual-core");
     Serial.println("========================");
@@ -93,9 +104,18 @@ static void loRaScanTask(void* param) {
     for (;;) {
         scannerSweep(radio, localResult);
 
+#ifdef BOARD_T3S3_LR1121
+        // 2.4 GHz sweep — LR1121 handles band switch transparently
+        ScanResult24 local24;
+        scannerSweep24(radio, local24);
+#endif
+
         // Snapshot GPS/integrity + update scan in shared state under one lock
         if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
             systemState.spectrum = localResult;
+#ifdef BOARD_T3S3_LR1121
+            systemState.spectrum24 = local24;
+#endif
             systemState.lastSweepMs = millis();
             snapGps = systemState.gps;
             snapIntegrity = systemState.integrity;
@@ -103,7 +123,11 @@ static void loRaScanTask(void* param) {
         }
 
         // Detection engine — single-threaded, runs only here
+#ifdef BOARD_T3S3_LR1121
+        ThreatLevel threat = detectionEngineUpdate(localResult, snapGps, snapIntegrity, &local24);
+#else
         ThreatLevel threat = detectionEngineUpdate(localResult, snapGps, snapIntegrity);
+#endif
 
         // Store threat level back into shared state
         if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
@@ -168,23 +192,68 @@ static const ScreenFn screens[] = {
 static void displayTask(void* param) {
     static SystemState local;
     int currentScreen = 0;
-    unsigned long lastButtonMs = 0;
     unsigned long lastAdvanceMs = millis();
+    bool buttonWasDown = false;
+    unsigned long buttonDownMs = 0;
+    bool dashboardMode = false;
 
     for (;;) {
-        // Button: advance screen on press with 200ms debounce
-        if (digitalRead(PIN_BOOT) == LOW && (millis() - lastButtonMs > 100)) {
-            currentScreen = (currentScreen + 1) % NUM_SCREENS;
-            lastButtonMs = millis();
-            lastAdvanceMs = millis();
-            if (xSemaphoreTake(serialMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-                Serial.printf("[UI] Button press — screen %d\n", currentScreen);
-                xSemaphoreGive(serialMutex);
+        bool buttonDown = (digitalRead(PIN_BOOT) == LOW);
+
+        if (buttonDown) {
+            if (!buttonWasDown) {
+                buttonDownMs = millis();
+                buttonWasDown = true;
             }
+
+            unsigned long held = millis() - buttonDownMs;
+
+            // Show countdown on OLED while holding for dashboard mode
+            if (held > 1000 && !dashboardMode) {
+                int remaining = 5 - (int)(held / 1000);
+                if (remaining > 0) {
+                    oled.clearDisplay();
+                    oled.setTextSize(1);
+                    oled.setTextColor(SSD1306_WHITE);
+                    oled.setCursor(10, 24);
+                    oled.printf("Dashboard in %d...", remaining);
+                    oled.display();
+                }
+            }
+
+            // 5-second hold: switch to dashboard mode
+            if (held >= 5000 && !dashboardMode) {
+                wifiScannerStop();
+                dashboardInit();
+                dashboardMode = true;
+                if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+                    systemState.wifiScannerActive = false;
+                    systemState.dashboardActive = true;
+                    xSemaphoreGive(stateMutex);
+                }
+                if (xSemaphoreTake(serialMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+                    Serial.println("[UI] Dashboard mode activated — power cycle to resume scanning");
+                    xSemaphoreGive(serialMutex);
+                }
+            }
+        } else {
+            if (buttonWasDown && !dashboardMode) {
+                unsigned long held = millis() - buttonDownMs;
+                // Short press: advance screen
+                if (held < 1000) {
+                    currentScreen = (currentScreen + 1) % NUM_SCREENS;
+                    lastAdvanceMs = millis();
+                    if (xSemaphoreTake(serialMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+                        Serial.printf("[UI] Button press — screen %d\n", currentScreen);
+                        xSemaphoreGive(serialMutex);
+                    }
+                }
+            }
+            buttonWasDown = false;
         }
 
         // Auto-rotate every 5 seconds if no button press
-        if (millis() - lastAdvanceMs > 5000) {
+        if (!dashboardMode && (millis() - lastAdvanceMs > 5000)) {
             currentScreen = (currentScreen + 1) % NUM_SCREENS;
             lastAdvanceMs = millis();
         }
@@ -195,12 +264,27 @@ static void displayTask(void* param) {
             xSemaphoreGive(stateMutex);
         }
 
-        // Render current screen outside lock
-        screens[currentScreen](oled, local, currentScreen);
+        if (!dashboardMode) {
+            // Normal mode: render OLED screens
+            screens[currentScreen](oled, local, currentScreen);
+        } else {
+            // Dashboard mode: serve HTTP + show status on OLED
+            dashboardUpdateState(local);
+            dashboardHandle();
 
-        // WiFi dashboard — update state and serve HTTP from this task only
-        dashboardUpdateState(local);
-        dashboardHandle();
+            oled.clearDisplay();
+            oled.setTextSize(1);
+            oled.setTextColor(SSD1306_WHITE);
+            oled.setCursor(0, 0);
+            oled.println("DASHBOARD MODE");
+            oled.setCursor(0, 16);
+            oled.println("SSID: SENTRY-RF");
+            oled.setCursor(0, 28);
+            oled.println("http://192.168.4.1");
+            oled.setCursor(0, 44);
+            oled.println("Reset to scan mode");
+            oled.display();
+        }
 
         vTaskDelay(pdMS_TO_TICKS(200));
     }
@@ -253,7 +337,10 @@ void setup() {
     integrityInit();
     detectionEngineInit();
     loggerInit();
-    dashboardInit();
+
+    // Default to WiFi scanner mode — dashboard only activates on 5-second button hold
+    wifiScannerInit();
+
     initCompassBus();
 
     // Create FreeRTOS primitives
@@ -270,9 +357,15 @@ void setup() {
                             PRIO_DISPLAY, &hDisplayTask, CORE_LORA);
     xTaskCreatePinnedToCore(alertTask, "Alert", STACK_ALERT, nullptr,
                             PRIO_ALERT, &hAlertTask, CORE_GPS);
+    xTaskCreatePinnedToCore(wifiScanTask, "WiFiScan", STACK_GPS_READ, nullptr,
+                            PRIO_ALERT, &hWiFiTask, CORE_GPS);
+
+    // Set initial WiFi mode
+    systemState.wifiScannerActive = true;
+    systemState.dashboardActive = false;
 
     digitalWrite(PIN_LED, LOW);
-    Serial.println("[INIT] FreeRTOS tasks launched — LoRa:Core1, GPS:Core0");
+    Serial.println("[INIT] FreeRTOS tasks launched — LoRa:Core1, GPS+WiFi:Core0");
 }
 
 void loop() {

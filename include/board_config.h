@@ -50,6 +50,8 @@ static const bool HAS_TCXO      = false;
 static const bool HAS_PSRAM     = true;
 static const bool HAS_SD_CARD   = true;
 static const bool HAS_COMPASS   = true;
+static const bool HAS_LR1121    = false;
+static const bool HAS_24GHZ     = false;
 static const bool WIFI_ENABLED  = true;
 
 #elif defined(BOARD_HELTEC_V3)
@@ -85,10 +87,60 @@ static const bool HAS_TCXO      = true;  // Must call setTCXO(1.8) before begin(
 static const bool HAS_PSRAM     = false;
 static const bool HAS_SD_CARD   = false;
 static const bool HAS_COMPASS   = false;
+static const bool HAS_LR1121    = false;
+static const bool HAS_24GHZ     = false;
+static const bool WIFI_ENABLED  = true;
+
+#elif defined(BOARD_T3S3_LR1121)
+// ----- LilyGo T3S3 with LR1121 (dual-band: sub-GHz + 2.4 GHz) -----
+// Identical pin mapping to T3S3 SX1262 — only the radio chip differs
+
+// LR1121 LoRa SPI (same pins as T3S3 SX1262)
+static const int PIN_LORA_SCK  = 5;
+static const int PIN_LORA_MISO = 3;
+static const int PIN_LORA_MOSI = 6;
+static const int PIN_LORA_CS   = 7;
+static const int PIN_LORA_RST  = 8;
+static const int PIN_LORA_DIO1 = 33;
+static const int PIN_LORA_BUSY = 34;
+
+// OLED SSD1306 I2C
+static const int PIN_OLED_SDA = 18;
+static const int PIN_OLED_SCL = 17;
+static const int PIN_OLED_RST = -1;
+static const int PIN_OLED_VEXT = -1;
+
+// Compass QMC5883L I2C
+static const int PIN_COMPASS_SDA = 21;
+static const int PIN_COMPASS_SCL = 10;
+
+// GPS UART1
+static const int PIN_GPS_RX = 44;
+static const int PIN_GPS_TX = 43;
+
+// SD card SPI
+static const int PIN_SD_CS   = 13;
+static const int PIN_SD_SCK  = 14;
+static const int PIN_SD_MISO = 2;
+static const int PIN_SD_MOSI = 15;
+
+// Status LED and button
+static const int PIN_LED  = 37;
+static const int PIN_BOOT = 0;
+
+// Board capabilities
+static const bool HAS_OLED_RST  = false;
+static const bool HAS_OLED_VEXT = false;
+static const bool HAS_TCXO      = true;   // LR1121 needs TCXO like Heltec
+static const bool HAS_PSRAM     = true;
+static const bool HAS_SD_CARD   = true;
+static const bool HAS_COMPASS   = true;
+static const bool HAS_LR1121    = true;
+static const bool HAS_24GHZ     = true;
 static const bool WIFI_ENABLED  = true;
 
 #else
-#error "No board defined! Use -DBOARD_T3S3 or -DBOARD_HELTEC_V3"
+#error "No board defined! Use -DBOARD_T3S3, -DBOARD_HELTEC_V3, or -DBOARD_T3S3_LR1121"
 #endif
 
 // Common constants

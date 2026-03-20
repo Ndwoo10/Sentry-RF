@@ -16,11 +16,16 @@ enum ThreatLevel : uint8_t {
 };
 
 // Shared state protected by stateMutex — copy under lock, process outside lock
+static const uint8_t DET_SOURCE_WIFI = 2;
+
 struct SystemState {
     ScanResult      spectrum;
+    ScanResult24    spectrum24;
     GpsData         gps;
     IntegrityStatus integrity;
     ThreatLevel     threatLevel;
+    bool            wifiScannerActive;
+    bool            dashboardActive;
     unsigned long   lastSweepMs;
     unsigned long   lastGpsMs;
 };

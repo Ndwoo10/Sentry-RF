@@ -12,7 +12,7 @@ static const char* CSV_HEADER =
 
 // ── T3S3: SD card logging ───────────────────────────────────────────────────
 
-#ifdef BOARD_T3S3
+#if defined(BOARD_T3S3) || defined(BOARD_T3S3_LR1121)
 #include <SD.h>
 #include <SPI.h>
 
