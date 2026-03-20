@@ -98,7 +98,7 @@ static bool bumpBaudRate() {
 bool gpsInit() {
     // T3S3 native USB CDC triggers a reset on connect — give it time to settle
     // before touching the GPS UART, otherwise the init sequence gets corrupted.
-#ifdef BOARD_T3S3
+#if defined(BOARD_T3S3) || defined(BOARD_T3S3_LR1121)
     delay(2000);
 #endif
 

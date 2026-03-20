@@ -17,7 +17,8 @@ struct TrackedSignal {
     bool      active;
 };
 
-static TrackedSignal tracked[MAX_TRACKED];
+static TrackedSignal tracked[MAX_TRACKED];      // sub-GHz
+static TrackedSignal tracked24[MAX_TRACKED];    // 2.4 GHz
 
 // ── Threat state machine ────────────────────────────────────────────────────
 
@@ -133,6 +134,32 @@ static void updateTracking(const DetectedPeak* peaks, int peakCount) {
     }
 }
 
+// ── 2.4 GHz peak extraction (uses WiFi channel filtering) ──────────────────
+
+static int extractPeaks24(const ScanResult24& scan, float noiseFloor, DetectedPeak* peaks) {
+    float threshold = noiseFloor + PEAK_THRESHOLD_DB;
+    int peakCount = 0;
+
+    for (int i = 1; i < SCAN_24_BIN_COUNT - 1 && peakCount < MAX_PEAKS; i++) {
+        if (scan.rssi[i] > threshold &&
+            scan.rssi[i] >= scan.rssi[i - 1] &&
+            scan.rssi[i] >= scan.rssi[i + 1]) {
+
+            float freq = SCAN_24_START + (i * SCAN_24_STEP);
+
+            // Skip energy on standard WiFi channels — likely routers, not drones
+            if (isWiFiChannel(freq)) continue;
+
+            peaks[peakCount].frequency = freq;
+            peaks[peakCount].rssi = scan.rssi[i];
+            peaks[peakCount].match = matchFrequency24(freq);
+            peakCount++;
+        }
+    }
+
+    return peakCount;
+}
+
 // ── Threat assessment ───────────────────────────────────────────────────────
 
 static int countPersistentDrone() {
@@ -141,6 +168,18 @@ static int countPersistentDrone() {
         if (tracked[t].active &&
             tracked[t].consecutiveCount >= PERSIST_THRESHOLD &&
             tracked[t].match.protocol != nullptr) {
+            count++;
+        }
+    }
+    return count;
+}
+
+static int countPersistentDrone24() {
+    int count = 0;
+    for (int t = 0; t < MAX_TRACKED; t++) {
+        if (tracked24[t].active &&
+            tracked24[t].consecutiveCount >= PERSIST_THRESHOLD &&
+            tracked24[t].match.protocol != nullptr) {
             count++;
         }
     }
@@ -168,19 +207,23 @@ static void emitEvent(const TrackedSignal& sig, uint8_t severity) {
 }
 
 static ThreatLevel assessThreat(const IntegrityStatus& integrity) {
-    int persistentDrones = countPersistentDrone();
+    int persistentSubGHz = countPersistentDrone();
+    int persistent24GHz  = countPersistentDrone24();
+    int totalPersistent  = persistentSubGHz + persistent24GHz;
     bool gnssAnomaly = integrity.jammingDetected || integrity.spoofingDetected ||
                        integrity.cnoAnomalyDetected;
+    // Cross-band correlation: signals on both bands simultaneously = strong indicator
+    bool crossBand = (persistentSubGHz >= 1) && (persistent24GHz >= 1);
 
     ThreatLevel desired = THREAT_CLEAR;
 
-    if (persistentDrones >= 1) {
+    if (totalPersistent >= 1) {
         desired = THREAT_ADVISORY;
     }
-    if (persistentDrones >= 1 && gnssAnomaly) {
+    if ((totalPersistent >= 1 && gnssAnomaly) || crossBand) {
         desired = THREAT_WARNING;
     }
-    if (persistentDrones >= 2 || (persistentDrones >= 1 &&
+    if (totalPersistent >= 2 || crossBand || (totalPersistent >= 1 &&
         (integrity.jammingDetected || integrity.spoofingDetected))) {
         desired = THREAT_CRITICAL;
     }
@@ -220,19 +263,65 @@ static ThreatLevel assessThreat(const IntegrityStatus& integrity) {
 
 void detectionEngineInit() {
     memset(tracked, 0, sizeof(tracked));
+    memset(tracked24, 0, sizeof(tracked24));
     currentThreat = THREAT_CLEAR;
     lastThreatEventMs = 0;
 }
 
 ThreatLevel detectionEngineUpdate(const ScanResult& scan, const GpsData& gps,
-                                  const IntegrityStatus& integrity) {
+                                  const IntegrityStatus& integrity,
+                                  const ScanResult24* scan24) {
+    // Sub-GHz detection pipeline
     float noiseFloor = computeNoiseFloor(scan.rssi, SCAN_BIN_COUNT);
-
     DetectedPeak peaks[MAX_PEAKS];
     int peakCount = extractPeaks(scan, noiseFloor, peaks);
 
     markAllUnseen();
     updateTracking(peaks, peakCount);
+
+    // 2.4 GHz detection pipeline — only when LR1121 provides valid data
+    if (scan24 != nullptr && scan24->valid) {
+        float nf24 = computeNoiseFloor(scan24->rssi, SCAN_24_BIN_COUNT);
+        DetectedPeak peaks24[MAX_PEAKS];
+        int peakCount24 = extractPeaks24(*scan24, nf24, peaks24);
+
+        // Reuse markAllUnseen/updateTracking pattern on the 2.4 GHz array
+        for (int i = 0; i < MAX_TRACKED; i++) {
+            if (tracked24[i].active) tracked24[i].consecutiveCount--;
+        }
+        // Match 2.4 GHz peaks to tracked24 array (same logic as sub-GHz)
+        unsigned long now = millis();
+        for (int p = 0; p < peakCount24; p++) {
+            bool matched = false;
+            for (int t = 0; t < MAX_TRACKED; t++) {
+                if (!tracked24[t].active) continue;
+                if (fabsf(peaks24[p].frequency - tracked24[t].frequency) < TRACK_FREQ_TOLERANCE) {
+                    tracked24[t].consecutiveCount += 2;
+                    tracked24[t].lastSeenMs = now;
+                    tracked24[t].frequency = peaks24[p].frequency;
+                    tracked24[t].match = peaks24[p].match;
+                    matched = true;
+                    break;
+                }
+            }
+            if (!matched) {
+                for (int t = 0; t < MAX_TRACKED; t++) {
+                    if (!tracked24[t].active || tracked24[t].consecutiveCount <= 0) {
+                        tracked24[t].frequency = peaks24[p].frequency;
+                        tracked24[t].match = peaks24[p].match;
+                        tracked24[t].consecutiveCount = 1;
+                        tracked24[t].lastSeenMs = now;
+                        tracked24[t].active = true;
+                        break;
+                    }
+                }
+            }
+        }
+        for (int t = 0; t < MAX_TRACKED; t++) {
+            if (tracked24[t].active && tracked24[t].consecutiveCount <= 0)
+                tracked24[t].active = false;
+        }
+    }
 
     return assessThreat(integrity);
 }

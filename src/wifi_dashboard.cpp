@@ -3,7 +3,7 @@
 #include "version.h"
 #include <Arduino.h>
 
-#if defined(BOARD_T3S3) || defined(BOARD_HELTEC_V3)
+#if defined(BOARD_T3S3) || defined(BOARD_HELTEC_V3) || defined(BOARD_T3S3_LR1121)
 #include <WiFi.h>
 #include <WebServer.h>
 
