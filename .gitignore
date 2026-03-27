@@ -1,0 +1,40 @@
+# PlatformIO
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# Development tool config
+.claude/
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# Build artifacts
+build/
+*.o
+*.a
+*.elf
+*.bin
+*.hex
+*.map
+
+# OS files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# IDE
+*.sublime-project
+*.sublime-workspace
+.idea/
+
+# Logs
+*.log
+
+# Research/planning documents
+Research1 (1).md
+Research1 (5).md
+SPRINT_ROADMAP_V2.md
