@@ -380,7 +380,7 @@ void setup() {
     printBanner();
 
     pinMode(PIN_LED, OUTPUT);
-    digitalWrite(PIN_LED, HIGH);
+    digitalWrite(PIN_LED, LOW);
     pinMode(PIN_BOOT, INPUT);  // External pull-up on GPIO 0 — no INPUT_PULLUP needed
 
     // Hardware init — all on Core 1 before tasks start

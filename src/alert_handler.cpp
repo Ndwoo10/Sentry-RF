@@ -167,9 +167,11 @@ void alertTask(void* param) {
             }
         }
 
-        // Update buzzer state for SystemState (display reads this)
+        // Read system threat level and update buzzer state
+        ThreatLevel systemThreat = THREAT_CLEAR;
         if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
             extern SystemState systemState;
+            systemThreat = systemState.threatLevel;
             systemState.buzzerMuted = _isMuted;
             systemState.buzzerAcknowledged = _isAcknowledged;
             systemState.muteRemainingMs = alertMuteRemainingMs();
@@ -238,7 +240,7 @@ void alertTask(void* param) {
         // Update buzzer state machine (non-blocking)
         buzzerUpdate();
 
-        // Update LED pattern
-        updateLED(_lastThreat, _isAcknowledged);
+        // LED tracks system threat level (from detection engine), not individual events
+        updateLED(systemThreat, _isAcknowledged);
     }
 }
