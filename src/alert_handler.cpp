@@ -3,7 +3,9 @@
 #include <Arduino.h>
 
 static const char* sourceStr(uint8_t source) {
-    return (source == DET_SOURCE_RF) ? "RF" : "GNSS";
+    if (source == DET_SOURCE_RF)   return "RF";
+    if (source == DET_SOURCE_WIFI) return "WIFI";
+    return "GNSS";
 }
 
 static const char* severityStr(uint8_t severity) {
