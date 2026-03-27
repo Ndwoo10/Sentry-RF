@@ -1,11 +1,25 @@
 #include "display.h"
 #include "board_config.h"
+#include "alert_handler.h"
 #include "version.h"
 #include "splash_logo.h"
 #include <Arduino.h>
 #include <Wire.h>
 
-// ── Helpers ─────────────────────────────────────────────────────────────────
+// ============================================================
+// Display rendering — all screens follow consistent layout:
+//   y=0:  Title text
+//   y=9:  Separator line (drawFastHLine)
+//   y=12: Data line 1
+//   y=22: Data line 2
+//   y=32: Data line 3
+//   y=42: Data line 4
+//   y=52: Data line 5
+//   y=57: Page dots
+// Max 21 characters per line at font size 1 (6x8 pixels)
+// ============================================================
+
+// ── Helpers ─────────────────────────────────────────────────
 
 static const char* fixTypeStr(uint8_t fixType) {
     switch (fixType) {
@@ -27,9 +41,9 @@ static const char* jammingStr(uint8_t state) {
 static const char* spoofStr(uint8_t state) {
     switch (state) {
         case 1:  return "Clean";
-        case 2:  return "Indicated";
-        case 3:  return "Multiple";
-        default: return "Unknown";
+        case 2:  return "Warn";
+        case 3:  return "Multi";
+        default: return "N/A";
     }
 }
 
@@ -42,9 +56,17 @@ static const char* threatStr(ThreatLevel t) {
     }
 }
 
+// Check if GPS data is valid and sane (not uninitialized garbage)
+static bool gpsIsValid(const GpsData& g) {
+    if (!g.valid) return false;
+    if (g.numSV > 100) return false;       // garbage: uninitialized memory
+    if (g.hAccMM > 100000000) return false; // > 100km accuracy = garbage
+    return true;
+}
+
 void drawPageDots(Adafruit_SSD1306& disp, int current, int total) {
     int startX = 64 - ((total * 8) / 2) + 4;
-    int y = 62;
+    int y = 60;
     for (int i = 0; i < total; i++) {
         int x = startX + (i * 8);
         if (i == current) {
@@ -55,7 +77,16 @@ void drawPageDots(Adafruit_SSD1306& disp, int current, int total) {
     }
 }
 
-// ── Init ────────────────────────────────────────────────────────────────────
+// Standard screen header: title + separator line
+static void drawHeader(Adafruit_SSD1306& disp, const char* title) {
+    disp.setTextSize(1);
+    disp.setTextColor(SSD1306_WHITE);
+    disp.setCursor(0, 0);
+    disp.print(title);
+    disp.drawFastHLine(0, 9, SCREEN_WIDTH, SSD1306_WHITE);
+}
+
+// ── Init ────────────────────────────────────────────────────
 
 void displayInit(Adafruit_SSD1306& disp) {
     if (HAS_OLED_VEXT) {
@@ -85,18 +116,16 @@ void displayBootSplash(Adafruit_SSD1306& disp) {
     delay(2000);
 }
 
-// ── Screen 0: Spectrum ──────────────────────────────────────────────────────
+// ── Spectrum helpers ────────────────────────────────────────
 
-static const int CHART_HEIGHT   = 42;
-static const int CHART_Y_OFFSET = 9;
+static const int CHART_HEIGHT   = 38;  // reduced from 42 to leave room for peak text
+static const int CHART_Y_OFFSET = 10;
 
 static int rssiToBarHeight(float rssi) {
     float clamped = constrain(rssi, DISPLAY_RSSI_MIN, DISPLAY_RSSI_MAX);
     float normalized = (clamped - DISPLAY_RSSI_MIN) / (DISPLAY_RSSI_MAX - DISPLAY_RSSI_MIN);
     return (int)(normalized * CHART_HEIGHT);
 }
-
-// ── Mini spectrum bar helper (60px wide × 10px tall) ────────────────────────
 
 static void drawMiniSpectrum(Adafruit_SSD1306& disp, int x, int y, int w, int h,
                              const float* rssi, int binCount) {
@@ -115,14 +144,14 @@ static void drawMiniSpectrum(Adafruit_SSD1306& disp, int x, int y, int w, int h,
     }
 }
 
-// ── Screen 0: Dashboard Summary ─────────────────────────────────────────────
+// ── Screen 0: Dashboard Summary ─────────────────────────────
 
 void screenDashboard(Adafruit_SSD1306& disp, const SystemState& state, int page) {
     disp.clearDisplay();
     disp.setTextSize(1);
     disp.setTextColor(SSD1306_WHITE);
 
-    // Line 0: SENTRY-RF + threat level
+    // Line 0: SENTRY-RF + threat level (right-aligned, inverted if WARNING+)
     disp.setCursor(0, 0);
     disp.print("SENTRY-RF");
     const char* tStr = threatStr(state.threatLevel);
@@ -135,48 +164,68 @@ void screenDashboard(Adafruit_SSD1306& disp, const SystemState& state, int page)
     disp.print(tStr);
     disp.setTextColor(SSD1306_WHITE);
 
-    // Line 1: Mini spectrum bars
-    drawMiniSpectrum(disp, 0, 10, 60, 10, state.spectrum.rssi, SCAN_BIN_COUNT);
-    disp.setCursor(64, 10);
+    // Line 1: Mini spectrum bars (sub-GHz)
+    drawMiniSpectrum(disp, 0, 12, 60, 8, state.spectrum.rssi, SCAN_BIN_COUNT);
+    disp.setCursor(64, 12);
     if (state.spectrum24.valid) {
-        drawMiniSpectrum(disp, 68, 10, 60, 10, state.spectrum24.rssi, SCAN_24_BIN_COUNT);
+        drawMiniSpectrum(disp, 68, 12, 60, 8, state.spectrum24.rssi, SCAN_24_BIN_COUNT);
     } else {
         disp.print("2.4:N/A");
     }
 
-    // Line 2: GPS + jamming + spoofing condensed (max 21 chars)
+    // Line 2: GPS condensed
     disp.setCursor(0, 22);
-    disp.printf("%s %dSV J:%s S:%s",
-                fixTypeStr(state.gps.fixType), state.gps.numSV,
-                jammingStr(state.gps.jammingState),
-                (state.gps.spoofDetState >= 2) ? "!" : "OK");
+    if (gpsIsValid(state.gps)) {
+        char buf[22];
+        snprintf(buf, sizeof(buf), "%s %dSV J:%s S:%s",
+                 fixTypeStr(state.gps.fixType), state.gps.numSV,
+                 jammingStr(state.gps.jammingState),
+                 (state.gps.spoofDetState >= 2) ? "!" : "OK");
+        disp.print(buf);
+    } else {
+        disp.print("GPS: --");
+    }
 
-    // Line 3: Sub-GHz peak (max 21 chars)
+    // Line 3: Sub-GHz peak
     disp.setCursor(0, 32);
-    disp.printf("%.0fdB @%.0fM", state.spectrum.peakRSSI, state.spectrum.peakFreq);
+    if (state.spectrum.peakRSSI > -110.0) {
+        char buf[22];
+        snprintf(buf, sizeof(buf), "%.0fdB @%.0fMHz",
+                 state.spectrum.peakRSSI, state.spectrum.peakFreq);
+        disp.print(buf);
+    } else {
+        disp.print("RF: quiet");
+    }
 
-    // Line 4: Battery + WiFi mode + compass
+    // Line 4: Battery + buzzer status
     disp.setCursor(0, 42);
-    disp.printf("Bat:%d%%  WiFi:SCAN", state.batteryPercent);
-    if (state.compass.valid) {
-        disp.printf(" %d%c", (int)state.compass.heading, 0xF8);
+    if (alertIsMuted()) {
+        unsigned long remain = alertMuteRemainingMs() / 1000;
+        char buf[22];
+        snprintf(buf, sizeof(buf), "Bat:%d%% MUTED %lus",
+                 state.batteryPercent, remain);
+        disp.print(buf);
+    } else if (alertIsAcknowledged()) {
+        char buf[22];
+        snprintf(buf, sizeof(buf), "Bat:%d%% ACK'd", state.batteryPercent);
+        disp.print(buf);
+    } else {
+        char buf[22];
+        snprintf(buf, sizeof(buf), "Bat:%d%% WiFi:SCAN", state.batteryPercent);
+        disp.print(buf);
     }
 
     drawPageDots(disp, page, NUM_SCREENS);
     disp.display();
 }
 
-// ── Screen 1: Sub-GHz Spectrum ──────────────────────────────────────────────
+// ── Screen 1: Sub-GHz Spectrum ──────────────────────────────
 
 void screenSpectrum(Adafruit_SSD1306& disp, const SystemState& state, int page) {
     disp.clearDisplay();
-    disp.setTextSize(1);
-    disp.setTextColor(SSD1306_WHITE);
+    drawHeader(disp, "RF 860-930MHz");
 
-    disp.setCursor(0, 0);
-    disp.print("RF SCAN 860-930MHz");
-
-    // Downsample 700 bins to 128 columns, draw bars
+    // Bars from y=10 to y=48 (height=38), leaving y=50+ clear for text
     for (int col = 0; col < SCREEN_WIDTH; col++) {
         int binStart = (col * SCAN_BIN_COUNT) / SCREEN_WIDTH;
         int binEnd   = ((col + 1) * SCAN_BIN_COUNT) / SCREEN_WIDTH;
@@ -190,37 +239,63 @@ void screenSpectrum(Adafruit_SSD1306& disp, const SystemState& state, int page) 
         }
     }
 
-    disp.setCursor(0, 51);
-    disp.printf("Pk:%.1f %.0fdBm", state.spectrum.peakFreq, state.spectrum.peakRSSI);
+    // Peak text below the chart area
+    disp.setCursor(0, 50);
+    char buf[22];
+    snprintf(buf, sizeof(buf), "Pk:%.1f %.0fdBm",
+             state.spectrum.peakFreq, state.spectrum.peakRSSI);
+    disp.print(buf);
 
     drawPageDots(disp, page, NUM_SCREENS);
     disp.display();
 }
 
-// ── Screen 1: GPS ───────────────────────────────────────────────────────────
+// ── Screen 2: GPS ───────────────────────────────────────────
 
 void screenGPS(Adafruit_SSD1306& disp, const SystemState& state, int page) {
     disp.clearDisplay();
-    disp.setTextSize(1);
-    disp.setTextColor(SSD1306_WHITE);
+    drawHeader(disp, "GPS");
 
     const GpsData& g = state.gps;
-    disp.setCursor(0, 0);
-    disp.printf("GPS %s FIX  %d SVs", fixTypeStr(g.fixType), g.numSV);
 
-    if (!g.valid || g.fixType < 2) {
-        disp.setCursor(0, 20);
-        disp.println("Acquiring...");
+    if (!gpsIsValid(g)) {
+        // No GPS connected or garbage data
+        disp.setTextSize(2);
+        disp.setCursor(20, 24);
+        disp.print("NO GPS");
+        disp.setTextSize(1);
+        disp.setCursor(20, 44);
+        disp.print("Module not found");
+    } else if (g.fixType < 2) {
+        disp.setCursor(0, 12);
+        disp.printf("%d SVs  Acquiring...", g.numSV);
+        disp.setCursor(0, 32);
+        disp.print("Waiting for fix");
     } else {
         disp.setCursor(0, 12);
-        disp.printf("%.5f,%.5f", g.latDeg7 / 1e7, g.lonDeg7 / 1e7);
-        disp.setCursor(0, 24);
-        disp.printf("Alt:%dm  pDOP:%.1f", g.altMM / 1000, g.pDOP / 100.0);
-        disp.setCursor(0, 36);
-        disp.printf("hAcc:%dm vAcc:%dm", g.hAccMM / 1000, g.vAccMM / 1000);
-        disp.setCursor(0, 48);
+        char buf[22];
+        snprintf(buf, sizeof(buf), "%s %dSV pDOP:%.1f",
+                 fixTypeStr(g.fixType), g.numSV, g.pDOP / 100.0);
+        disp.print(buf);
+
+        disp.setCursor(0, 22);
+        snprintf(buf, sizeof(buf), "%.5f", g.latDeg7 / 1e7);
+        disp.print(buf);
+
+        disp.setCursor(0, 32);
+        snprintf(buf, sizeof(buf), "%.5f", g.lonDeg7 / 1e7);
+        disp.print(buf);
+
+        disp.setCursor(0, 42);
+        snprintf(buf, sizeof(buf), "Alt:%dm hAcc:%dm",
+                 (int)(g.altMM / 1000), (int)(g.hAccMM / 1000));
+        disp.print(buf);
+
+        disp.setCursor(0, 52);
         if (state.compass.valid) {
-            disp.printf("HDG: %.0f%c %s", state.compass.heading, 0xF8, state.compass.directionStr);
+            snprintf(buf, sizeof(buf), "HDG:%.0f%c %s",
+                     state.compass.heading, 0xF8, state.compass.directionStr);
+            disp.print(buf);
         } else {
             disp.print("HDG: --");
         }
@@ -230,41 +305,54 @@ void screenGPS(Adafruit_SSD1306& disp, const SystemState& state, int page) {
     disp.display();
 }
 
-// ── Screen 2: GNSS Integrity ────────────────────────────────────────────────
+// ── Screen 3: GNSS Integrity ────────────────────────────────
 
 void screenIntegrity(Adafruit_SSD1306& disp, const SystemState& state, int page) {
     disp.clearDisplay();
-    disp.setTextSize(1);
-    disp.setTextColor(SSD1306_WHITE);
+    drawHeader(disp, "GNSS INTEGRITY");
 
-    disp.setCursor(0, 0);
-    disp.print("GNSS INTEGRITY");
-
-    disp.setCursor(0, 12);
-    disp.printf("Jam:%s  JamI:%d", jammingStr(state.gps.jammingState), state.gps.jamInd);
-
-    disp.setCursor(0, 24);
-    disp.printf("Spoof: %s", spoofStr(state.gps.spoofDetState));
-
-    disp.setCursor(0, 36);
-    disp.printf("C/N0sd:%.1f AGC:", state.integrity.cnoStdDev);
-    if (state.gps.jammingState == 0 && state.gps.agcPercent == 0) {
-        disp.print("--");
+    if (!gpsIsValid(state.gps)) {
+        disp.setTextSize(2);
+        disp.setCursor(6, 24);
+        disp.print("NO GPS");
+        disp.setTextSize(1);
+        disp.setCursor(6, 44);
+        disp.print("Module not found");
     } else {
-        disp.printf("%d%%", state.gps.agcPercent);
+        disp.setCursor(0, 12);
+        char buf[22];
+        snprintf(buf, sizeof(buf), "Jam:%s  JamI:%d",
+                 jammingStr(state.gps.jammingState), state.gps.jamInd);
+        disp.print(buf);
+
+        disp.setCursor(0, 22);
+        snprintf(buf, sizeof(buf), "Spoof: %s", spoofStr(state.gps.spoofDetState));
+        disp.print(buf);
+
+        disp.setCursor(0, 32);
+        snprintf(buf, sizeof(buf), "C/N0sd:%.1f", state.integrity.cnoStdDev);
+        disp.print(buf);
+
+        disp.setCursor(0, 42);
+        if (state.gps.jammingState == 0 && state.gps.agcPercent == 0) {
+            disp.print("AGC: --");
+        } else {
+            snprintf(buf, sizeof(buf), "AGC: %d%%", state.gps.agcPercent);
+            disp.print(buf);
+        }
     }
 
     drawPageDots(disp, page, NUM_SCREENS);
     disp.display();
 }
 
-// ── Screen 3: Threat ────────────────────────────────────────────────────────
+// ── Screen 4: Threat ────────────────────────────────────────
 
 void screenThreat(Adafruit_SSD1306& disp, const SystemState& state, int page) {
     disp.clearDisplay();
     disp.setTextSize(1);
 
-    // Invert header bar for WARNING and CRITICAL
+    // Inverted header bar for WARNING and CRITICAL
     if (state.threatLevel >= THREAT_WARNING) {
         disp.fillRect(0, 0, 128, 10, SSD1306_WHITE);
         disp.setTextColor(SSD1306_BLACK);
@@ -275,25 +363,60 @@ void screenThreat(Adafruit_SSD1306& disp, const SystemState& state, int page) {
     disp.printf("THREAT: %s", threatStr(state.threatLevel));
     disp.setTextColor(SSD1306_WHITE);
 
-    disp.setCursor(0, 14);
+    // RF status
+    disp.setCursor(0, 12);
     if (state.spectrum.peakRSSI > -110.0) {
-        disp.printf("RF: %.1fMHz %.0fdBm", state.spectrum.peakFreq, state.spectrum.peakRSSI);
+        char buf[22];
+        snprintf(buf, sizeof(buf), "RF:%.0fMHz %.0fdBm",
+                 state.spectrum.peakFreq, state.spectrum.peakRSSI);
+        disp.print(buf);
     } else {
         disp.print("RF: No signals");
     }
 
-    disp.setCursor(0, 26);
-    disp.printf("GNSS: %s %dSV", fixTypeStr(state.gps.fixType), state.gps.numSV);
+    // GPS status
+    disp.setCursor(0, 22);
+    if (gpsIsValid(state.gps)) {
+        char buf[22];
+        snprintf(buf, sizeof(buf), "GPS:%s %dSV",
+                 fixTypeStr(state.gps.fixType), state.gps.numSV);
+        disp.print(buf);
+    } else {
+        disp.print("GPS: --");
+    }
 
-    disp.setCursor(0, 38);
-    disp.printf("Jam:%s Spf:%s",
-                jammingStr(state.gps.jammingState),
-                spoofStr(state.gps.spoofDetState));
+    // Jamming/spoofing
+    disp.setCursor(0, 32);
+    if (gpsIsValid(state.gps)) {
+        char buf[22];
+        snprintf(buf, sizeof(buf), "Jam:%s Spf:%s",
+                 jammingStr(state.gps.jammingState),
+                 spoofStr(state.gps.spoofDetState));
+        disp.print(buf);
+    } else {
+        disp.print("Jam:-- Spf:--");
+    }
 
-    disp.setCursor(0, 50);
+    // Buzzer status
+    disp.setCursor(0, 42);
+    if (alertIsMuted()) {
+        disp.print("Buzzer: MUTED");
+    } else if (alertIsAcknowledged()) {
+        disp.print("Buzzer: ACK'd");
+    } else if (state.threatLevel >= THREAT_WARNING) {
+        disp.print("Buzzer: ARMED");
+    } else {
+        disp.print("Buzzer: standby");
+    }
+
+    // Bearing
+    disp.setCursor(0, 52);
     if (state.compass.valid && state.compass.peakRSSI > -200.0 &&
         (millis() - state.compass.peakTimestamp < 30000)) {
-        disp.printf("Bearing: %.0f%c", state.compass.peakBearing, 0xF8);
+        char buf[22];
+        snprintf(buf, sizeof(buf), "Bearing: %.0f%c",
+                 state.compass.peakBearing, 0xF8);
+        disp.print(buf);
     } else {
         disp.print("Bearing: --");
     }
@@ -302,33 +425,38 @@ void screenThreat(Adafruit_SSD1306& disp, const SystemState& state, int page) {
     disp.display();
 }
 
-// ── Screen 4: System Info ───────────────────────────────────────────────────
+// ── Screen 5: System Info ───────────────────────────────────
 
 void screenSystem(Adafruit_SSD1306& disp, const SystemState& state, int page) {
     disp.clearDisplay();
-    disp.setTextSize(1);
-    disp.setTextColor(SSD1306_WHITE);
+    drawHeader(disp, "SYSTEM");
 
-    disp.setCursor(0, 0);
-    disp.print("SYSTEM");
-
+    char buf[22];
     disp.setCursor(0, 12);
-    disp.printf("%s v%s", FW_NAME, FW_VERSION);
+    snprintf(buf, sizeof(buf), "%s v%s", FW_NAME, FW_VERSION);
+    disp.print(buf);
 
     unsigned long sec = millis() / 1000;
-    unsigned long h = sec / 3600;
-    unsigned long m = (sec % 3600) / 60;
-    unsigned long s = sec % 60;
-    disp.setCursor(0, 24);
-    disp.printf("Up: %luh %lum %lus", h, m, s);
+    disp.setCursor(0, 22);
+    snprintf(buf, sizeof(buf), "Up: %luh %lum %lus",
+             sec / 3600, (sec % 3600) / 60, sec % 60);
+    disp.print(buf);
 
-    disp.setCursor(0, 36);
-    disp.printf("Heap: %u bytes", ESP.getFreeHeap());
+    disp.setCursor(0, 32);
+    snprintf(buf, sizeof(buf), "Heap: %u", ESP.getFreeHeap());
+    disp.print(buf);
 
-    disp.setCursor(0, 48);
-    if (compassIsCalibrating()) {
-        disp.print("Compass: CAL...");
-    } else if (state.compass.valid) {
+    disp.setCursor(0, 42);
+    if (alertIsMuted()) {
+        unsigned long remain = alertMuteRemainingMs() / 1000;
+        snprintf(buf, sizeof(buf), "Buzzer: MUTED %lus", remain);
+    } else {
+        snprintf(buf, sizeof(buf), "Buzzer: Armed");
+    }
+    disp.print(buf);
+
+    disp.setCursor(0, 52);
+    if (state.compass.valid) {
         disp.print("Compass: OK");
     } else {
         disp.print("Compass: N/A");
@@ -338,15 +466,11 @@ void screenSystem(Adafruit_SSD1306& disp, const SystemState& state, int page) {
     disp.display();
 }
 
-// ── Screen 6: 2.4 GHz Spectrum (LR1121 only) ───────────────────────────────
+// ── Screen 6: 2.4 GHz Spectrum (LR1121 only) ───────────────
 
 void screenSpectrum24(Adafruit_SSD1306& disp, const SystemState& state, int page) {
     disp.clearDisplay();
-    disp.setTextSize(1);
-    disp.setTextColor(SSD1306_WHITE);
-
-    disp.setCursor(0, 0);
-    disp.print("2.4GHz 2400-2500MHz");
+    drawHeader(disp, "2.4GHz 2400-2500MHz");
 
     if (!state.spectrum24.valid) {
         disp.setCursor(0, 28);
@@ -356,12 +480,14 @@ void screenSpectrum24(Adafruit_SSD1306& disp, const SystemState& state, int page
         return;
     }
 
-    // Reuse mini spectrum helper at full width for the chart area
     drawMiniSpectrum(disp, 0, CHART_Y_OFFSET, SCREEN_WIDTH, CHART_HEIGHT,
                      state.spectrum24.rssi, SCAN_24_BIN_COUNT);
 
-    disp.setCursor(0, 53);
-    disp.printf("Pk:%.0f %.0fdBm", state.spectrum24.peakFreq, state.spectrum24.peakRSSI);
+    disp.setCursor(0, 50);
+    char buf[22];
+    snprintf(buf, sizeof(buf), "Pk:%.0f %.0fdBm",
+             state.spectrum24.peakFreq, state.spectrum24.peakRSSI);
+    disp.print(buf);
 
     drawPageDots(disp, page, NUM_SCREENS);
     disp.display();
