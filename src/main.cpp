@@ -267,7 +267,6 @@ static void displayTask(void* param) {
     unsigned long lastAdvanceMs = millis();
     bool buttonWasDown = false;
     unsigned long buttonDownMs = 0;
-    unsigned long lastShortPressMs = 0;
     unsigned long calDisplayStartMs = 0;
     bool wasCalibrating = false;
 
@@ -283,32 +282,16 @@ static void displayTask(void* param) {
             if (buttonWasDown) {
                 unsigned long held = millis() - buttonDownMs;
 
-                if (held >= 3000 && held < 5000) {
-                    // 3-5 second hold: toggle buzzer mute
+                if (held >= 3000) {
+                    // 3+ second hold: toggle buzzer mute
                     alertToggleMute();
-                } else if (held >= 100 && held < 1000) {
-                    // Short press — check for double-press
-                    if (lastShortPressMs > 0 && millis() - lastShortPressMs < 500) {
-                        // Double-press: ACK alert if threat active, else compass cal
-                        if (alertIsAcknowledged() == false && local.threatLevel > THREAT_CLEAR) {
-                            alertAcknowledge();
-                            if (xSemaphoreTake(serialMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-                                Serial.println("[UI] Double-press — alert ACK");
-                                xSemaphoreGive(serialMutex);
-                            }
-                        } else {
-                            compassStartCalibration();
-                            if (xSemaphoreTake(serialMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-                                Serial.println("[UI] Double-press — calibration toggle");
-                                xSemaphoreGive(serialMutex);
-                            }
-                        }
-                        lastShortPressMs = 0;
-                    } else {
-                        currentScreen = (currentScreen + 1) % NUM_SCREENS;
-                        lastAdvanceMs = millis();
-                        lastShortPressMs = millis();
-                    }
+                } else if (held >= 1000) {
+                    // 1-3 second hold: ACK current alert
+                    alertAcknowledge();
+                } else if (held >= 100) {
+                    // Short press: advance screen
+                    currentScreen = (currentScreen + 1) % NUM_SCREENS;
+                    lastAdvanceMs = millis();
                 }
             }
             buttonWasDown = false;
