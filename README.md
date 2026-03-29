@@ -1,7 +1,8 @@
 ![SENTRY-RF Logo](./Sentry-RF_Logo.png)
+
 # SENTRY-RF
 
-**Open-source passive drone RF detector + GNSS jamming/spoofing monitor**
+**Passive drone RF detection + GNSS jamming/spoofing monitor for ESP32-S3**
 
 ![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)
 ![Platform: ESP32-S3](https://img.shields.io/badge/Platform-ESP32--S3-blue.svg)
