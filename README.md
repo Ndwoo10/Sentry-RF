@@ -1,6 +1,5 @@
-<div align="center">
-  <img src="Sentry-RF_Logo.png" alt="SENTRY-RF Logo" width="500">
-</div>
+![SENTRY-RF Logo](Sentry-RF_Logo.png)
+
 # SENTRY-RF
 
 **Passive drone RF detection + GNSS jamming/spoofing monitor for ESP32-S3**
