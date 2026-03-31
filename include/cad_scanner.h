@@ -54,6 +54,7 @@ static const int CRSF_CHANNELS     = 100;  // 260 kHz spacing
 // ── Public API ──────────────────────────────────────────────────────────────
 
 void cadScannerInit();
+bool cadWarmupComplete();
 
 // Run the full fishing pole scan cycle.
 // Called from loRaScanTask after RSSI sweep completes.

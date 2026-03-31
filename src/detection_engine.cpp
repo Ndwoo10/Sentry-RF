@@ -1,6 +1,7 @@
 #include "detection_engine.h"
 #include "drone_signatures.h"
 #include "ambient_filter.h"
+#include "cad_scanner.h"
 #include <Arduino.h>
 #include <string.h>
 
@@ -446,21 +447,28 @@ static ThreatLevel assessThreat(const IntegrityStatus& integrity) {
     bool gnssAnomaly = integrity.jammingDetected || integrity.spoofingDetected ||
                        integrity.cnoAnomalyDetected;
 
-    // CAD activity: any LoRa detection at any confidence level
-    bool anyCadActivity = (cadDetectionsThisCycle > 0) || (fskDetectionsThisCycle > 0)
-                          || (strongPendingCadThisCycle > 0) || (totalActiveTapsThisCycle > 0);
-
     // RSSI persistence in the US band (no cell tower overlap)
     int protoUS = countPersistentProtocolUS();
     bool rssiPersistentUS = (freqUS >= 1) || (protoUS >= 1);
 
-    // HIGH: confirmed CAD alone (definitive), OR any CAD + persistent RSSI (corroborated)
-    bool highConfidence = (cadDetectionsThisCycle > 0) || (fskDetectionsThisCycle > 0)
-                          || (anyCadActivity && rssiPersistentUS);
+    // CAD activity levels:
+    // - confirmed (3+ hits): definitive drone — persistence eliminates LoRaWAN/Meshtastic
+    // - any pending: possible drone — needs RSSI corroboration for WARNING, not CRITICAL
+    bool confirmedCad = (cadDetectionsThisCycle > 0) || (fskDetectionsThisCycle > 0);
+    bool anyCadActivity = confirmedCad || (strongPendingCadThisCycle > 0)
+                          || (totalActiveTapsThisCycle > 0);
 
-    // MEDIUM: persistent RSSI in US band, band energy rise, or strong CAD pending
+    // HIGH: 2+ distinct confirmed non-ambient taps (rules out a single missed
+    // infrastructure source). One confirmed tap is likely a LoRa gateway that
+    // the warmup filter didn't catch.
+    bool highConfidence = confirmedCad && (cadDetectionsThisCycle >= 2);
+
+    // MEDIUM: persistent RSSI in US band (with or without CAD corroboration),
+    //         OR band energy elevated, OR strong CAD pending WITH RSSI backup.
+    //         strongPendingCad alone is NOT medium — ambient LoRa sources
+    //         frequently reach 2 consecutive hits on a LoRa-rich bench.
     bool mediumConfidence = rssiPersistentUS || bandEnergyElevated
-                            || (strongPendingCadThisCycle > 0);
+                            || (strongPendingCadThisCycle > 0 && rssiPersistentUS);
 
     ThreatLevel desired = THREAT_CLEAR;
 
@@ -484,8 +492,8 @@ static ThreatLevel assessThreat(const IntegrityStatus& integrity) {
         desired = THREAT_WARNING;
     }
 
-    // Warmup guard
-    if (!ambientFilterReady() && desired > THREAT_ADVISORY) {
+    // Warmup guard — both RSSI and CAD warmups must complete
+    if ((!ambientFilterReady() || !cadWarmupComplete()) && desired > THREAT_ADVISORY) {
         desired = THREAT_ADVISORY;
     }
 
