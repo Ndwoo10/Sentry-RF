@@ -33,7 +33,7 @@ static float crsfFskFreq(int ch) { return 902.165f + (ch * 0.260f); }
 // NOT seen during warmup.
 
 static const int MAX_AMBIENT_TAPS = 32;
-static const int AMBIENT_CAD_WARMUP_CYCLES = 20;  // ~50s at ~2.5s/cycle
+static const unsigned long AMBIENT_WARMUP_MS = 50000;  // 50 seconds real time
 static const float AMBIENT_FREQ_TOLERANCE = 0.2f;  // ±200 kHz match window
 
 struct AmbientTap {
@@ -71,6 +71,10 @@ static void recordAmbientTap(float freq, uint8_t sf) {
 }
 
 // ── Tap list management ─────────────────────────────────────────────────────
+
+bool cadWarmupComplete() {
+    return warmupComplete;
+}
 
 void cadScannerInit() {
     memset(tapList, 0, sizeof(tapList));
@@ -268,14 +272,14 @@ CadFskResult cadFskScan(SX1262& radio, uint32_t cycleNum) {
     switchToFSK(radio);
     radio.setRxBoostedGainMode(true);
 
-    // ── Warmup: record confirmed taps as ambient LoRa sources ───────────
+    // ── Warmup: record taps as ambient LoRa sources ──────────────────────
     warmupCycleCount++;
 
     if (!warmupComplete) {
-        if (warmupCycleCount >= AMBIENT_CAD_WARMUP_CYCLES) {
+        if (millis() >= AMBIENT_WARMUP_MS) {
             warmupComplete = true;
-            Serial.printf("[WARMUP] Complete after %u cycles. %u ambient taps recorded:\n",
-                          warmupCycleCount, ambientTapCount);
+            Serial.printf("[WARMUP] Complete after %u cycles (%lus). %u ambient taps recorded:\n",
+                          warmupCycleCount, millis() / 1000, ambientTapCount);
             for (uint8_t i = 0; i < ambientTapCount; i++) {
                 if (ambientTaps[i].active) {
                     Serial.printf("  - %.1f MHz / SF%u (first seen cycle %u)\n",
@@ -284,31 +288,38 @@ CadFskResult cadFskScan(SX1262& radio, uint32_t cycleNum) {
                 }
             }
         } else {
-            // Still in warmup — record any tap with 2+ hits as infrastructure.
-            // This catches ambient sources that build slowly (LoRaWAN gateways,
-            // Meshtastic relays) before they reach the 3-hit confirmation threshold.
+            // Still in warmup — record ANY active LoRa tap as infrastructure.
+            // Threshold is 1 hit (not 2 or 3) because ambient sources are
+            // intermittent and may not accumulate consecutive hits in time.
             for (int i = 0; i < MAX_TAPS; i++) {
-                if (tapList[i].active &&
-                    !tapList[i].isFsk &&
-                    tapList[i].consecutiveHits >= 2) {
+                if (tapList[i].active && !tapList[i].isFsk) {
                     recordAmbientTap(tapList[i].frequency, tapList[i].sf);
                 }
             }
         }
     }
 
-    // Post-warmup ambient catch: taps first seen during the warmup window that
-    // took extra cycles to accumulate 3 hits are still infrastructure. A drone
-    // arriving after warmup will have firstSeenMs after the warmup end time.
+    // Post-warmup continuous ambient learning:
+    // Infrastructure LoRa sources transmit on fixed frequencies indefinitely.
+    // Drone FHSS taps are short-lived per-frequency (3 misses → deactivated).
+    // Any confirmed tap alive for 30+ seconds on a fixed frequency is infrastructure.
     if (warmupComplete) {
-        unsigned long warmupEndMs = AMBIENT_CAD_WARMUP_CYCLES * 2500UL;
+        unsigned long now = millis();
         for (int i = 0; i < MAX_TAPS; i++) {
             if (tapList[i].active &&
                 !tapList[i].isFsk &&
                 tapList[i].consecutiveHits >= TAP_CONFIRM_HITS &&
-                tapList[i].firstSeenMs < warmupEndMs &&
                 !isAmbientCadSource(tapList[i].frequency, tapList[i].sf)) {
-                recordAmbientTap(tapList[i].frequency, tapList[i].sf);
+                // Taps first seen during warmup: auto-add
+                if (tapList[i].firstSeenMs < AMBIENT_WARMUP_MS) {
+                    recordAmbientTap(tapList[i].frequency, tapList[i].sf);
+                }
+                // Taps alive 10+ seconds post-warmup: auto-learn as ambient.
+                // FHSS drone taps expire in ~3 cycles ≈ 2s per frequency (drone hops
+                // away). Infrastructure persists on fixed frequencies for minutes+.
+                else if ((now - tapList[i].firstSeenMs) > 10000) {
+                    recordAmbientTap(tapList[i].frequency, tapList[i].sf);
+                }
             }
         }
     }

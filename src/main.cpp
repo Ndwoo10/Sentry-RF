@@ -96,115 +96,157 @@ static const char* threatLevelStr(ThreatLevel t) {
     }
 }
 
+// RSSI sweep runs every Nth CAD cycle — CAD is the fast path (~80ms),
+// RSSI is background maintenance (~2.2s). Keeps first-alert latency low.
+static const int RSSI_SWEEP_INTERVAL = 3;
+
 // Core 1 — LoRa SPI is only touched here, no mutex needed for the radio
 static void loRaScanTask(void* param) {
     ScanResult localResult;
     GpsData snapGps = {};
     IntegrityStatus snapIntegrity = {};
     uint32_t sweepNum = 0;
+    uint32_t cycleCount = 0;
+#ifdef BOARD_T3S3_LR1121
+    ScanResult24 local24;
+#endif
 
     // ── Main scan loop ────────────────────────────────────────────────────
     for (;;) {
-        // RSSI sweep — works in LoRa mode via setFrequency + startReceive + getRSSI
-        scannerSweep(radio, localResult);
+        cycleCount++;
+        unsigned long cycleStart = millis();
 
-#ifdef BOARD_T3S3_LR1121
-        ScanResult24 local24;
-        scannerSweep24(radio, local24);
-#endif
-
-        // CAD scan — no mode switch needed, we're already in LoRa mode
+        // ── PHASE 1: CAD scan FIRST (~68ms) ─────────────────────────
+        // Highest-confidence detection. Runs EVERY cycle.
         CadFskResult cadFsk = cadFskScan(radio, sweepNum);
         detectionEngineSetCadFsk(cadFsk.confirmedCadCount, cadFsk.confirmedFskCount,
                                 cadFsk.strongPendingCad, cadFsk.totalActiveTaps);
 
-        // Snapshot GPS/integrity + update scan in shared state under one lock
+        unsigned long cadDone = millis();
+
+        // Snapshot GPS/integrity under lock
         if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-            systemState.spectrum = localResult;
-#ifdef BOARD_T3S3_LR1121
-            systemState.spectrum24 = local24;
-#endif
-            systemState.lastSweepMs = millis();
             snapGps = systemState.gps;
             snapIntegrity = systemState.integrity;
             xSemaphoreGive(stateMutex);
         }
 
-        // Detection engine — single-threaded, runs only here
+        // Evaluate threat immediately with CAD results + last RSSI data
 #ifdef BOARD_T3S3_LR1121
         ThreatLevel threat = detectionEngineUpdate(localResult, snapGps, snapIntegrity, &local24);
 #else
         ThreatLevel threat = detectionEngineUpdate(localResult, snapGps, snapIntegrity);
 #endif
 
-        // Store threat level back into shared state
+        // Store threat + CAD results into shared state
         if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
             systemState.threatLevel = threat;
             xSemaphoreGive(stateMutex);
         }
 
-        // Log to SD/SPIFFS — uses its own SPI bus (FSPI), no conflict with LoRa (HSPI)
+        // ── PHASE 2: RSSI sweep every Nth cycle (~2.2s) ─────────────
+        bool didRssi = false;
+        if (cycleCount % RSSI_SWEEP_INTERVAL == 0) {
+            unsigned long sweepStart = millis();
+            scannerSweep(radio, localResult);
+
+#ifdef BOARD_T3S3_LR1121
+            scannerSweep24(radio, local24);
+#endif
+            didRssi = true;
+
+            // Update shared state with RSSI data
+            if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+                systemState.spectrum = localResult;
+#ifdef BOARD_T3S3_LR1121
+                systemState.spectrum24 = local24;
+#endif
+                systemState.lastSweepMs = millis();
+                xSemaphoreGive(stateMutex);
+            }
+
+            // Re-assess with fresh RSSI data
+#ifdef BOARD_T3S3_LR1121
+            threat = detectionEngineUpdate(localResult, snapGps, snapIntegrity, &local24);
+#else
+            threat = detectionEngineUpdate(localResult, snapGps, snapIntegrity);
+#endif
+            if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+                systemState.threatLevel = threat;
+                xSemaphoreGive(stateMutex);
+            }
+        }
+
+        // Log to SD/SPIFFS
         loggerWrite(systemState, sweepNum++);
 
+        unsigned long cycleEnd = millis();
+
+        // Serial output
         if (xSemaphoreTake(serialMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-            scannerPrintCSV(localResult);
-            Serial.printf("[SCAN] Peak: %.1f MHz @ %.1f dBm (%lu ms) | Threat: %s\n",
-                          localResult.peakFreq, localResult.peakRSSI,
-                          localResult.sweepTimeMs, threatLevelStr(threat));
+            // Timing instrumentation
+            if (didRssi) {
+                Serial.printf("[SCAN] CAD:%lums RSSI:%lums Total:%lums | Threat: %s\n",
+                              cadDone - cycleStart,
+                              cycleEnd - cadDone,
+                              cycleEnd - cycleStart,
+                              threatLevelStr(threat));
+                scannerPrintCSV(localResult);
+                Serial.printf("[SCAN] Peak: %.1f MHz @ %.1f dBm (%lu ms)\n",
+                              localResult.peakFreq, localResult.peakRSSI,
+                              localResult.sweepTimeMs);
+
+                // 902-928 MHz US band peak analysis
+                {
+                    int startBin = (int)((902.0f - SCAN_FREQ_START) / SCAN_FREQ_STEP);
+                    int endBin   = (int)((928.0f - SCAN_FREQ_START) / SCAN_FREQ_STEP);
+                    if (endBin >= SCAN_BIN_COUNT) endBin = SCAN_BIN_COUNT - 1;
+                    int bandBins = endBin - startBin + 1;
+
+                    float nf = -120.0f;
+                    for (int step = startBin; step <= endBin; step += 7) {
+                        float candidate = localResult.rssi[step];
+                        int below = 0, equal = 0;
+                        for (int j = startBin; j <= endBin; j++) {
+                            if (localResult.rssi[j] < candidate) below++;
+                            else if (localResult.rssi[j] == candidate) equal++;
+                        }
+                        if (below <= bandBins / 2 && (below + equal) > bandBins / 2) {
+                            nf = candidate;
+                            break;
+                        }
+                    }
+
+                    float relThresh = nf + 15.0f;
+                    float absThresh = -85.0f;
+                    float thresh = (relThresh > absThresh) ? relThresh : absThresh;
+
+                    int elrsPeaks = 0;
+                    float bestFreq = 0, bestRssi = -200;
+                    for (int i = startBin + 1; i < endBin; i++) {
+                        if (localResult.rssi[i] > thresh &&
+                            localResult.rssi[i] > localResult.rssi[i-1] &&
+                            localResult.rssi[i] > localResult.rssi[i+1]) {
+                            elrsPeaks++;
+                            if (localResult.rssi[i] > bestRssi) {
+                                bestRssi = localResult.rssi[i];
+                                bestFreq = SCAN_FREQ_START + (i * SCAN_FREQ_STEP);
+                            }
+                        }
+                    }
+                    if (elrsPeaks > 0) {
+                        Serial.printf("[SCAN-PEAKS] 902-928: %d peaks, best %.1f MHz @ %.1f dBm (NF:%.0f)\n",
+                                      elrsPeaks, bestFreq, bestRssi, nf);
+                    }
+                }
+            } else {
+                Serial.printf("[SCAN] CAD:%lums | Threat: %s\n",
+                              cadDone - cycleStart, threatLevelStr(threat));
+            }
+
             Serial.printf("[CAD] cycle=%u conf=%d strong=%d pend=%d taps=%d\n",
                           sweepNum, cadFsk.confirmedCadCount, cadFsk.strongPendingCad,
                           cadFsk.pendingTaps, cadFsk.totalActiveTaps);
-
-            // Print peaks above noise floor in the 902-928 MHz ELRS US band.
-            // Uses median-based noise floor from the 902-928 sub-band itself
-            // to avoid the 868 MHz ambient energy biasing the threshold.
-            {
-                int startBin = (int)((902.0f - SCAN_FREQ_START) / SCAN_FREQ_STEP);
-                int endBin   = (int)((928.0f - SCAN_FREQ_START) / SCAN_FREQ_STEP);
-                if (endBin >= SCAN_BIN_COUNT) endBin = SCAN_BIN_COUNT - 1;
-                int bandBins = endBin - startBin + 1;
-
-                // Compute median noise floor of the 902-928 sub-band only
-                float nf = -120.0f;
-                for (int step = startBin; step <= endBin; step += 7) {
-                    float candidate = localResult.rssi[step];
-                    int below = 0, equal = 0;
-                    for (int j = startBin; j <= endBin; j++) {
-                        if (localResult.rssi[j] < candidate) below++;
-                        else if (localResult.rssi[j] == candidate) equal++;
-                    }
-                    if (below <= bandBins / 2 && (below + equal) > bandBins / 2) {
-                        nf = candidate;
-                        break;
-                    }
-                }
-
-                // Dual threshold: must be both 15 dB above sub-band noise floor
-                // AND above -90 dBm absolute. This filters ambient ISM energy
-                // while catching real drone signals (-60 to -80 dBm at range).
-                float relThresh = nf + 15.0f;
-                float absThresh = -85.0f;
-                float thresh = (relThresh > absThresh) ? relThresh : absThresh;
-
-                int elrsPeaks = 0;
-                float bestFreq = 0, bestRssi = -200;
-                for (int i = startBin + 1; i < endBin; i++) {
-                    // Local maximum: strictly above both neighbors AND above threshold
-                    if (localResult.rssi[i] > thresh &&
-                        localResult.rssi[i] > localResult.rssi[i-1] &&
-                        localResult.rssi[i] > localResult.rssi[i+1]) {
-                        elrsPeaks++;
-                        if (localResult.rssi[i] > bestRssi) {
-                            bestRssi = localResult.rssi[i];
-                            bestFreq = SCAN_FREQ_START + (i * SCAN_FREQ_STEP);
-                        }
-                    }
-                }
-                if (elrsPeaks > 0) {
-                    Serial.printf("[SCAN-PEAKS] 902-928: %d peaks, best %.1f MHz @ %.1f dBm (NF:%.0f)\n",
-                                  elrsPeaks, bestFreq, bestRssi, nf);
-                }
-            }
 
             xSemaphoreGive(serialMutex);
         }
