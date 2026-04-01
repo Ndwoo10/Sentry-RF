@@ -58,6 +58,10 @@ static const int   MAX_AMBIENT_TAPS               = 32;     // max ambient tap e
 static const float AMBIENT_FREQ_TOLERANCE         = 0.2f;   // +/-MHz match window
 static const unsigned long AMBIENT_AUTOLEARN_MS   = 60000;  // ms before confirmed tap auto-learned (was 10s)
 
+// ── FSK Detection (Crossfire/FrSky) ──────────────────────────────────
+static const float FSK_DETECT_THRESHOLD_DBM = -50.0f;  // dBm — strict, bench ambient is -60 to -70
+static const int   FSK_DWELL_US             = 2500;    // microseconds per channel dwell
+
 // ── RSSI-Guided CAD ──────────────────────────────────────────────────
 static const float RSSI_GUIDED_THRESH_DB = 8.0f;   // dB above NF for guided CAD targeting
 static const int   RSSI_GUIDED_MAX_BINS  = 8;      // max elevated bins to CAD-check

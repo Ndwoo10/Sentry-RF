@@ -454,9 +454,8 @@ static ThreatLevel assessThreat(const IntegrityStatus& integrity) {
                           || (diversity >= DIVERSITY_WARNING && rssiPersistentUS)
                           || (confirmedCad && cadDetectionsThisCycle >= 2);
 
-    // MEDIUM: moderate FHSS pattern OR band energy elevated
-    bool mediumConfidence = (diversity >= DIVERSITY_WARNING)
-                            || bandEnergyElevated;
+    // MEDIUM: moderate FHSS pattern (diversity alone drives WARNING)
+    bool mediumConfidence = (diversity >= DIVERSITY_WARNING);
 
     // LOW: any diversity OR RSSI persistence OR 2.4 GHz
     bool lowConfidence = (diversity >= 1)
@@ -500,7 +499,9 @@ static ThreatLevel assessThreat(const IntegrityStatus& integrity) {
         memset(bandEnergyHistory, 0, sizeof(bandEnergyHistory));
         bandEnergyIdx = 0; bandEnergySamples = 0; bandEnergyElevated = false;
         cleanCycleCount = 0;
+        currentThreat = THREAT_CLEAR;
         desired = THREAT_CLEAR;
+        lastThreatEventMs = millis();
     }
 
     unsigned long now = millis();
