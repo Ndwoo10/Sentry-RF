@@ -59,6 +59,7 @@ static uint32_t rotSF9  = 0;
 static uint32_t rotSF10 = 0;
 static uint32_t rotSF11 = 0;
 static uint32_t rotSF12 = 0;
+static uint32_t rotFSK  = 0;
 
 // ── Channel frequency helpers ───────────────────────────────────────────────
 
@@ -181,7 +182,7 @@ void cadScannerInit() {
     ambientTapCount = 0;
     warmupCycleCount = 0;
     warmupComplete = false;
-    rotSF6 = rotSF7 = rotSF8 = rotSF9 = rotSF10 = rotSF11 = rotSF12 = 0;
+    rotSF6 = rotSF7 = rotSF8 = rotSF9 = rotSF10 = rotSF11 = rotSF12 = rotFSK = 0;
 }
 
 static CadTap* findTap(float freq, uint8_t sf) {
@@ -201,6 +202,24 @@ static CadTap* addTap(float freq, uint8_t sf) {
             tapList[i].frequency = freq;
             tapList[i].sf = sf;
             tapList[i].isFsk = false;
+            tapList[i].isAmbient = false;
+            tapList[i].consecutiveHits = 1;
+            tapList[i].missCount = 0;
+            tapList[i].firstSeenMs = millis();
+            tapList[i].lastSeenMs = millis();
+            tapList[i].active = true;
+            return &tapList[i];
+        }
+    }
+    return nullptr;
+}
+
+static CadTap* addFskTap(float freq) {
+    for (int i = 0; i < MAX_TAPS; i++) {
+        if (!tapList[i].active) {
+            tapList[i].frequency = freq;
+            tapList[i].sf = 0;
+            tapList[i].isFsk = true;
             tapList[i].isAmbient = false;
             tapList[i].consecutiveHits = 1;
             tapList[i].missCount = 0;
@@ -299,9 +318,10 @@ CadFskResult cadFskScan(SX1262& radio, uint32_t cycleNum, const ScanResult* rssi
     // Switch from FSK to LoRa packet type via low-level SPI command
     switchToLoRa(radio);
 
-    // ── PHASE 1: Priority re-check active taps + adjacent channels ─────
+    // ── PHASE 1: Priority re-check active LoRa taps + adjacent channels ──
     for (int i = 0; i < MAX_TAPS; i++) {
         if (!tapList[i].active) continue;
+        if (tapList[i].isFsk) continue;  // FSK taps re-checked in Phase 3
         radio.setSpreadingFactor(tapList[i].sf);
         ChannelScanConfig_t cfg = buildCadConfig(tapList[i].sf);
         radio.setFrequency(tapList[i].frequency);
@@ -417,7 +437,57 @@ CadFskResult cadFskScan(SX1262& radio, uint32_t cycleNum, const ScanResult* rssi
         }
     }
 
-    // PHASE 3 (FSK listen) — skipped until CAD is proven working
+    // ── PHASE 3: FSK preamble detection (Crossfire/FrSky) ────────────────
+    // DISABLED: FSK mode switch corrupts LoRa CAD state on next cycle,
+    // causing inflated diversity. Needs investigation of RadioLib internal
+    // state after FSK→LoRa transitions.
+#if 0
+    // Switch to FSK mode, re-check existing FSK taps, then scan new channels.
+    {
+        radio.standby();
+        uint8_t fskType = 0x00;
+        radioMod.SPIwriteStream(0x8A, &fskType, 1);
+
+        // Configure for Crossfire 150 Hz: 85.1 kbps, ~25 kHz deviation
+        radio.setBitRate(85.1);
+        radio.setFrequencyDeviation(25.0);
+        radio.setRxBandwidth(117.3);
+
+        // Re-check existing FSK taps (hit/miss like Phase 1 does for LoRa)
+        for (int i = 0; i < MAX_TAPS; i++) {
+            if (!tapList[i].active || !tapList[i].isFsk) continue;
+            radio.setFrequency(tapList[i].frequency);
+            radio.startReceive();
+            delayMicroseconds(FSK_DWELL_US);
+            float r = radio.getRSSI(false);
+            if (r > FSK_DETECT_THRESHOLD_DBM) tapHit(&tapList[i]);
+            else tapMiss(&tapList[i]);
+        }
+
+        // Scan new Crossfire channels (rotating)
+        int stride = CRSF_CHANNELS / FSK_CH;
+        if (stride < 1) stride = 1;
+        int offset = rotFSK % stride;
+        rotFSK++;
+
+        for (int i = 0; i < FSK_CH; i++) {
+            int ch = (offset + i * stride) % CRSF_CHANNELS;
+            float freq = crsfFskFreq(ch);
+
+            radio.setFrequency(freq);
+            radio.startReceive();
+            delayMicroseconds(FSK_DWELL_US);
+
+            float r = radio.getRSSI(false);
+            if (r > FSK_DETECT_THRESHOLD_DBM) {
+                CadTap* existing = findTap(freq, 0);
+                if (existing) tapHit(existing);
+                else addFskTap(freq);
+            }
+        }
+    }
+
+#endif
 
     // ── PHASE 4: Switch back to FSK for next RSSI sweep ────────────────
     switchToFSK(radio);
