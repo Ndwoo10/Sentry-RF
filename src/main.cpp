@@ -116,11 +116,14 @@ static void loRaScanTask(void* param) {
         cycleCount++;
         unsigned long cycleStart = millis();
 
-        // ── PHASE 1: CAD scan FIRST (~68ms) ─────────────────────────
+        // ── PHASE 1: CAD scan FIRST (~1000ms) ────────────────────────
         // Highest-confidence detection. Runs EVERY cycle.
-        CadFskResult cadFsk = cadFskScan(radio, sweepNum);
+        // Pass last RSSI data for RSSI-guided CAD scanning.
+        CadFskResult cadFsk = cadFskScan(radio, sweepNum,
+                                          localResult.sweepTimeMs > 0 ? &localResult : nullptr);
         detectionEngineSetCadFsk(cadFsk.confirmedCadCount, cadFsk.confirmedFskCount,
-                                cadFsk.strongPendingCad, cadFsk.totalActiveTaps);
+                                cadFsk.strongPendingCad, cadFsk.totalActiveTaps,
+                                cadFsk.recentHitCount);
 
         unsigned long cadDone = millis();
 
@@ -244,9 +247,9 @@ static void loRaScanTask(void* param) {
                               cadDone - cycleStart, threatLevelStr(threat));
             }
 
-            Serial.printf("[CAD] cycle=%u conf=%d strong=%d pend=%d taps=%d\n",
+            Serial.printf("[CAD] cycle=%u conf=%d strong=%d pend=%d taps=%d recent=%d\n",
                           sweepNum, cadFsk.confirmedCadCount, cadFsk.strongPendingCad,
-                          cadFsk.pendingTaps, cadFsk.totalActiveTaps);
+                          cadFsk.pendingTaps, cadFsk.totalActiveTaps, cadFsk.recentHitCount);
 
             xSemaphoreGive(serialMutex);
         }
