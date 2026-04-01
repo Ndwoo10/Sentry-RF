@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include <RadioLib.h>
 #include "board_config.h"
+#include "rf_scanner.h"
 
 // ── Tap-and-verify data structures ──────────────────────────────────────────
 
@@ -30,20 +31,21 @@ struct CadFskResult {
     int strongPendingCad;     // CAD taps with exactly 2 consecutive hits
     int pendingTaps;          // active taps not yet confirmed
     int totalActiveTaps;      // all active taps (any hit count)
+    int recentHitCount;       // non-ambient CAD hits in last 30s (any freq/SF)
 };
 
 // ── Channel scan parameters ─────────────────────────────────────────────────
 
 // Channels scanned per cycle at each SF (rotating across full channel plan)
-// SF6 dominates: ELRS 200Hz and Crossfire 50Hz are the most common drone modes.
-// Total: 66 channels, ~33ms per cycle.
-static const int CAD_CH_SF6  = 40;
-static const int CAD_CH_SF7  = 15;
-static const int CAD_CH_SF8  = 5;
-static const int CAD_CH_SF9  = 3;
-static const int CAD_CH_SF10 = 1;
-static const int CAD_CH_SF11 = 1;
-static const int CAD_CH_SF12 = 1;
+// Doubled from Sprint 1B for higher per-cycle catch probability.
+// Total: ~121 channels, target ~1000ms per cycle.
+static const int CAD_CH_SF6  = 60;   // ELRS 200Hz — highest priority
+static const int CAD_CH_SF7  = 30;   // ELRS 150Hz — second priority
+static const int CAD_CH_SF8  = 15;   // ELRS 100Hz
+static const int CAD_CH_SF9  = 8;
+static const int CAD_CH_SF10 = 4;
+static const int CAD_CH_SF11 = 2;
+static const int CAD_CH_SF12 = 2;
 static const int FSK_CH      = 4;
 
 // Total ELRS channel counts
@@ -57,12 +59,11 @@ void cadScannerInit();
 bool cadWarmupComplete();
 
 // Run the full fishing pole scan cycle.
-// Called from loRaScanTask after RSSI sweep completes.
-// cycleNum increments each call for channel rotation.
+// Called from loRaScanTask every cycle. rssi may be nullptr if no RSSI data yet.
 #ifdef BOARD_T3S3_LR1121
-CadFskResult cadFskScan(LR1121& radio, uint32_t cycleNum);
+CadFskResult cadFskScan(LR1121& radio, uint32_t cycleNum, const ScanResult* rssi = nullptr);
 #else
-CadFskResult cadFskScan(SX1262& radio, uint32_t cycleNum);
+CadFskResult cadFskScan(SX1262& radio, uint32_t cycleNum, const ScanResult* rssi = nullptr);
 #endif
 
 #endif // CAD_SCANNER_H

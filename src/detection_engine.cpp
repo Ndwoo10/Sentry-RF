@@ -43,6 +43,7 @@ static int cadDetectionsThisCycle = 0;
 static int fskDetectionsThisCycle = 0;
 static int strongPendingCadThisCycle = 0;
 static int totalActiveTapsThisCycle = 0;
+static int recentHitCountThisCycle = 0;
 
 // ── Band energy trending (902-928 MHz) ──────────────────────────────────
 // Tracks average RSSI across US band to detect aggregate FHSS energy rise.
@@ -451,24 +452,23 @@ static ThreatLevel assessThreat(const IntegrityStatus& integrity) {
     int protoUS = countPersistentProtocolUS();
     bool rssiPersistentUS = (freqUS >= 1) || (protoUS >= 1);
 
-    // CAD activity levels:
-    // - confirmed (3+ hits): definitive drone — persistence eliminates LoRaWAN/Meshtastic
-    // - any pending: possible drone — needs RSSI corroboration for WARNING, not CRITICAL
+    // Rolling 30-second non-ambient CAD hit count — aggregates hits across ALL
+    // frequencies/SFs. Catches FHSS pattern where no single frequency accumulates
+    // consecutive hits but the aggregate rate is clearly above ambient.
+    int recentHits = recentHitCountThisCycle;
+
+    // HIGH: RSSI persistence + 3+ recent CAD hits in 30s (two independent sensors),
+    // OR 2+ confirmed non-ambient taps (consecutive-hit path).
+    // recentHits alone is NOT sufficient — LoRa-rich environments produce 10+ ambient
+    // hits in 30s even with the warmup filter.
     bool confirmedCad = (cadDetectionsThisCycle > 0) || (fskDetectionsThisCycle > 0);
-    bool anyCadActivity = confirmedCad || (strongPendingCadThisCycle > 0)
-                          || (totalActiveTapsThisCycle > 0);
+    bool highConfidence = (rssiPersistentUS && recentHits >= 3)
+                          || (confirmedCad && cadDetectionsThisCycle >= 2);
 
-    // HIGH: 2+ distinct confirmed non-ambient taps (rules out a single missed
-    // infrastructure source). One confirmed tap is likely a LoRa gateway that
-    // the warmup filter didn't catch.
-    bool highConfidence = confirmedCad && (cadDetectionsThisCycle >= 2);
-
-    // MEDIUM: persistent RSSI in US band (with or without CAD corroboration),
-    //         OR band energy elevated, OR strong CAD pending WITH RSSI backup.
-    //         strongPendingCad alone is NOT medium — ambient LoRa sources
-    //         frequently reach 2 consecutive hits on a LoRa-rich bench.
-    bool mediumConfidence = rssiPersistentUS || bandEnergyElevated
-                            || (strongPendingCadThisCycle > 0 && rssiPersistentUS);
+    // MEDIUM: RSSI persistence + any CAD evidence, OR persistent RSSI in US band alone,
+    //         OR band energy elevated.
+    bool mediumConfidence = (rssiPersistentUS && recentHits >= 1)
+                            || rssiPersistentUS || bandEnergyElevated;
 
     ThreatLevel desired = THREAT_CLEAR;
 
@@ -552,6 +552,7 @@ void detectionEngineInit() {
     fskDetectionsThisCycle = 0;
     strongPendingCadThisCycle = 0;
     totalActiveTapsThisCycle = 0;
+    recentHitCountThisCycle = 0;
     memset(bandEnergyHistory, 0, sizeof(bandEnergyHistory));
     bandEnergyIdx = 0;
     bandEnergySamples = 0;
@@ -561,11 +562,12 @@ void detectionEngineInit() {
     ambientFilterInit();
 }
 
-void detectionEngineSetCadFsk(int cadCount, int fskCount, int strongPendingCad, int activeTaps) {
+void detectionEngineSetCadFsk(int cadCount, int fskCount, int strongPendingCad, int activeTaps, int recentHits) {
     cadDetectionsThisCycle = cadCount;
     fskDetectionsThisCycle = fskCount;
     strongPendingCadThisCycle = strongPendingCad;
     totalActiveTapsThisCycle = activeTaps;
+    recentHitCountThisCycle = recentHits;
 }
 
 ThreatLevel detectionEngineUpdate(const ScanResult& scan, const GpsData& gps,

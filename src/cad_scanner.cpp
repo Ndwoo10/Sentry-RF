@@ -17,14 +17,17 @@ struct CadParams {
     uint8_t detMin;
 };
 
+// BW500 values from Semtech AN1200.48 Table 43 (empirically optimized).
+// SF6 not tested by Semtech — extrapolated as SF+13.
+// SF11 uses Semtech's 25 (not SF+13=24). SF12 uses 8 symbols per Semtech.
 static const CadParams cadParams[] = {
-    { 0x02, 19, 10 },  // SF6  — 4 sym, detPeak=SF+13 (Semtech AN1200.48 default)
-    { 0x02, 20, 10 },  // SF7  — 4 sym, detPeak=SF+13
-    { 0x02, 21, 10 },  // SF8  — 4 sym, detPeak=SF+13
-    { 0x02, 22, 10 },  // SF9  — 4 sym, detPeak=SF+13
-    { 0x02, 23, 10 },  // SF10 — 4 sym, detPeak=SF+13
-    { 0x02, 24, 10 },  // SF11 — 4 sym, detPeak=SF+13
-    { 0x02, 25, 10 },  // SF12 — 4 sym, detPeak=SF+13
+    { 0x02, 19, 10 },  // SF6  — 4 sym, detPeak=19 (extrapolated)
+    { 0x02, 21, 10 },  // SF7  — 4 sym, detPeak=21 (Semtech Table 43)
+    { 0x02, 22, 10 },  // SF8  — 4 sym, detPeak=22 (Semtech Table 43)
+    { 0x02, 22, 10 },  // SF9  — 4 sym, detPeak=22 (Semtech Table 43)
+    { 0x02, 23, 10 },  // SF10 — 4 sym, detPeak=23 (Semtech Table 43)
+    { 0x02, 25, 10 },  // SF11 — 4 sym, detPeak=25 (Semtech Table 43)
+    { 0x03, 29, 10 },  // SF12 — 8 sym, detPeak=29 (Semtech Table 43)
 };
 
 static ChannelScanConfig_t buildCadConfig(uint8_t sf) {
@@ -107,6 +110,32 @@ static void recordAmbientTap(float freq, uint8_t sf) {
     }
 }
 
+// ── Recent CAD hit ring buffer (Part 3) ─────────────────────────────────────
+// Tracks timestamps of non-ambient CAD hits within a 30-second window.
+// Aggregates hits across ALL frequencies/SFs — catches FHSS pattern where
+// no single frequency accumulates consecutive hits.
+
+static const int RECENT_HIT_BUF_SIZE = 64;
+static const unsigned long RECENT_HIT_WINDOW_MS = 30000;
+static unsigned long recentHitTimestamps[RECENT_HIT_BUF_SIZE];
+static int recentHitWriteIdx = 0;
+
+static void recordRecentHit() {
+    recentHitTimestamps[recentHitWriteIdx] = millis();
+    recentHitWriteIdx = (recentHitWriteIdx + 1) % RECENT_HIT_BUF_SIZE;
+}
+
+static int countRecentHits() {
+    unsigned long now = millis();
+    int count = 0;
+    for (int i = 0; i < RECENT_HIT_BUF_SIZE; i++) {
+        if (recentHitTimestamps[i] > 0 && (now - recentHitTimestamps[i]) < RECENT_HIT_WINDOW_MS) {
+            count++;
+        }
+    }
+    return count;
+}
+
 // ── Tap list management ─────────────────────────────────────────────────────
 
 bool cadWarmupComplete() {
@@ -116,6 +145,8 @@ bool cadWarmupComplete() {
 void cadScannerInit() {
     memset(tapList, 0, sizeof(tapList));
     memset(ambientTaps, 0, sizeof(ambientTaps));
+    memset(recentHitTimestamps, 0, sizeof(recentHitTimestamps));
+    recentHitWriteIdx = 0;
     ambientTapCount = 0;
     warmupCycleCount = 0;
     warmupComplete = false;
@@ -224,15 +255,15 @@ static void switchToFSK(SX1262& radio) {
 
 #ifdef BOARD_T3S3_LR1121
 
-CadFskResult cadFskScan(LR1121& radio, uint32_t cycleNum) {
-    CadFskResult result = {0, 0, 0, 0, 0};
+CadFskResult cadFskScan(LR1121& radio, uint32_t cycleNum, const ScanResult* rssi) {
+    CadFskResult result = {0, 0, 0, 0, 0, 0};
     return result;
 }
 
 #else // SX1262 boards
 
-CadFskResult cadFskScan(SX1262& radio, uint32_t cycleNum) {
-    CadFskResult result = {0, 0, 0, 0, 0};
+CadFskResult cadFskScan(SX1262& radio, uint32_t cycleNum, const ScanResult* rssi) {
+    CadFskResult result = {0, 0, 0, 0, 0, 0};
 
     // Switch from FSK to LoRa packet type via low-level SPI command
     switchToLoRa(radio);
@@ -260,6 +291,48 @@ CadFskResult cadFskScan(SX1262& radio, uint32_t cycleNum) {
                 }
             }
             if (!adjHit) tapMiss(&tapList[i]);
+        }
+    }
+
+    // ── PHASE 1.5: RSSI-guided CAD on elevated US-band bins ─────────────
+    // Focus CAD budget where RSSI already shows energy. Even stale RSSI data
+    // (1-2 cycles old) is valid because drone signals are persistent.
+    if (rssi != nullptr && rssi->sweepTimeMs > 0) {
+        int startBin = (int)((902.0f - SCAN_FREQ_START) / SCAN_FREQ_STEP);
+        int endBin   = (int)((928.0f - SCAN_FREQ_START) / SCAN_FREQ_STEP);
+        if (endBin >= SCAN_BIN_COUNT) endBin = SCAN_BIN_COUNT - 1;
+
+        // Quick noise floor estimate from the US sub-band
+        float nf = -120.0f;
+        for (int step = startBin; step <= endBin; step += 11) {
+            float c = rssi->rssi[step];
+            int below = 0, equal = 0;
+            for (int j = startBin; j <= endBin; j += 3) {
+                if (rssi->rssi[j] < c) below++;
+                else if (rssi->rssi[j] == c) equal++;
+            }
+            int total = (endBin - startBin) / 3 + 1;
+            if (below <= total / 2 && (below + equal) > total / 2) { nf = c; break; }
+        }
+
+        float thresh = nf + 8.0f;
+        int guidedScans = 0;
+        radio.setSpreadingFactor(6);
+        ChannelScanConfig_t cfg6 = buildCadConfig(6);
+
+        for (int bin = startBin; bin <= endBin && guidedScans < 8; bin++) {
+            if (rssi->rssi[bin] > thresh) {
+                float freq = SCAN_FREQ_START + (bin * SCAN_FREQ_STEP);
+                radio.setFrequency(freq);
+                if (radio.scanChannel(cfg6) == RADIOLIB_LORA_DETECTED) {
+                    CadTap* existing = findTap(freq, 6);
+                    if (existing) tapHit(existing);
+                    else addTap(freq, 6);
+                    if (warmupComplete && !isAmbientCadSource(freq, 6))
+                        recordRecentHit();
+                }
+                guidedScans++;
+            }
         }
     }
 
@@ -303,6 +376,9 @@ CadFskResult cadFskScan(SX1262& radio, uint32_t cycleNum) {
             if (radio.scanChannel(cfg) == RADIOLIB_LORA_DETECTED) {
                 CadTap* existing = findTap(freq, sc.sf);
                 if (!existing) addTap(freq, sc.sf);
+                // Record non-ambient hits for the rolling 30s counter
+                if (warmupComplete && !isAmbientCadSource(freq, sc.sf))
+                    recordRecentHit();
             }
         }
     }
@@ -375,6 +451,7 @@ CadFskResult cadFskScan(SX1262& radio, uint32_t cycleNum) {
     }
 
     countConfirmed(result.confirmedCadCount, result.confirmedFskCount, result.strongPendingCad, result.pendingTaps, result.totalActiveTaps);
+    result.recentHitCount = countRecentHits();
 
     return result;
 }
