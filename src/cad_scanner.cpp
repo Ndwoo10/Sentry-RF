@@ -6,6 +6,43 @@
 // Access the Module object for low-level SPI commands (defined in main.cpp)
 extern Module radioMod;
 
+// ── Per-SF CAD detection parameters (Semtech AN1200.48) ────────────────────
+// Biased toward higher detection probability — persistence filter handles
+// false hits. Index by (SF - 6).
+// #define DEBUG_CAD_PARAMS  // Uncomment to log per-SF parameter selection
+
+struct CadParams {
+    uint8_t symbolNum;   // RADIOLIB_SX126X_CAD_ON_2_SYMB=0x01, _4_SYMB=0x02
+    uint8_t detPeak;
+    uint8_t detMin;
+};
+
+static const CadParams cadParams[] = {
+    { 0x02, 19, 10 },  // SF6  — 4 sym, detPeak=SF+13 (Semtech AN1200.48 default)
+    { 0x02, 20, 10 },  // SF7  — 4 sym, detPeak=SF+13
+    { 0x02, 21, 10 },  // SF8  — 4 sym, detPeak=SF+13
+    { 0x02, 22, 10 },  // SF9  — 4 sym, detPeak=SF+13
+    { 0x02, 23, 10 },  // SF10 — 4 sym, detPeak=SF+13
+    { 0x02, 24, 10 },  // SF11 — 4 sym, detPeak=SF+13
+    { 0x02, 25, 10 },  // SF12 — 4 sym, detPeak=SF+13
+};
+
+static ChannelScanConfig_t buildCadConfig(uint8_t sf) {
+    uint8_t idx = (sf >= 6 && sf <= 12) ? (sf - 6) : 0;
+    ChannelScanConfig_t cfg = {
+        .cad = {
+            .symNum = cadParams[idx].symbolNum,
+            .detPeak = cadParams[idx].detPeak,
+            .detMin = cadParams[idx].detMin,
+            .exitMode = RADIOLIB_SX126X_CAD_GOTO_STDBY,
+            .timeout = 0,
+            .irqFlags = RADIOLIB_IRQ_CAD_DEFAULT_FLAGS,
+            .irqMask = RADIOLIB_IRQ_CAD_DEFAULT_MASK,
+        },
+    };
+    return cfg;
+}
+
 // ── Tap list (persists across scan cycles) ──────────────────────────────────
 
 static CadTap tapList[MAX_TAPS];
@@ -204,19 +241,18 @@ CadFskResult cadFskScan(SX1262& radio, uint32_t cycleNum) {
     for (int i = 0; i < MAX_TAPS; i++) {
         if (!tapList[i].active) continue;
         radio.setSpreadingFactor(tapList[i].sf);
+        ChannelScanConfig_t cfg = buildCadConfig(tapList[i].sf);
         radio.setFrequency(tapList[i].frequency);
-        if (radio.scanChannel() == RADIOLIB_LORA_DETECTED) {
+        if (radio.scanChannel(cfg) == RADIOLIB_LORA_DETECTED) {
             tapHit(&tapList[i]);
         } else {
-            // Adjacent channel re-check: ELRS hops pseudo-randomly, so the
-            // drone likely moved to a nearby channel. Check ±1 channel.
             bool adjHit = false;
-            float spacing = 0.325f;  // ELRS 915 US channel spacing
+            float spacing = 0.325f;
             for (float delta : {-spacing, spacing}) {
                 float adjFreq = tapList[i].frequency + delta;
                 if (adjFreq >= 902.0f && adjFreq <= 928.0f) {
                     radio.setFrequency(adjFreq);
-                    if (radio.scanChannel() == RADIOLIB_LORA_DETECTED) {
+                    if (radio.scanChannel(cfg) == RADIOLIB_LORA_DETECTED) {
                         tapHit(&tapList[i]);
                         adjHit = true;
                         break;
@@ -245,10 +281,15 @@ CadFskResult cadFskScan(SX1262& radio, uint32_t cycleNum) {
     for (int s = 0; s < 7; s++) {
         SFScan& sc = sfScans[s];
         radio.setSpreadingFactor(sc.sf);
+        ChannelScanConfig_t cfg = buildCadConfig(sc.sf);
 
-        // Stride-based channel spread: instead of scanning sequential blocks,
-        // spread across the full band. E.g., SF6 scans 40 of 80 channels
-        // with stride=2: ch 0,2,4,6... on cycle 0; ch 1,3,5,7... on cycle 1.
+#ifdef DEBUG_CAD_PARAMS
+        uint8_t idx = sc.sf - 6;
+        Serial.printf("[CAD-PARAMS] SF%u: sym=0x%02X peak=%u min=%u\n",
+                      sc.sf, cadParams[idx].symbolNum,
+                      cadParams[idx].detPeak, cadParams[idx].detMin);
+#endif
+
         int stride = sc.totalCh / sc.chCount;
         if (stride < 1) stride = 1;
         int offset = (*sc.rot) % stride;
@@ -259,7 +300,7 @@ CadFskResult cadFskScan(SX1262& radio, uint32_t cycleNum) {
             float freq = sc.fn(ch);
             radio.setFrequency(freq);
 
-            if (radio.scanChannel() == RADIOLIB_LORA_DETECTED) {
+            if (radio.scanChannel(cfg) == RADIOLIB_LORA_DETECTED) {
                 CadTap* existing = findTap(freq, sc.sf);
                 if (!existing) addTap(freq, sc.sf);
             }
