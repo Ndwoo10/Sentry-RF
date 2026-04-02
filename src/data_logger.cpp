@@ -15,25 +15,54 @@ static const char* CSV_HEADER =
 #if defined(BOARD_T3S3) || defined(BOARD_T3S3_LR1121)
 #include <SD.h>
 #include <SPI.h>
+#include <SD_MMC.h>
 
 static SPIClass sdSPI(FSPI);
 static File logFile;
 static File jsonlFile;
+static bool useMMC = false;  // true if SD_MMC worked instead of SPI
 
 static int findNextIndex() {
     for (int i = 0; i < 10000; i++) {
         char buf[24];
         snprintf(buf, sizeof(buf), "/log_%04d.csv", i);
-        if (!SD.exists(buf)) return i;
+        bool exists = useMMC ? SD_MMC.exists(buf) : SD.exists(buf);
+        if (!exists) return i;
     }
     return -1;
 }
 
 bool loggerInit() {
+    Serial.printf("[LOG] SD pins: CS=%d SCK=%d MISO=%d MOSI=%d\n",
+                  PIN_SD_CS, PIN_SD_SCK, PIN_SD_MISO, PIN_SD_MOSI);
+
+    Serial.printf("[LOG] SD pins: CS=%d SCK=%d MISO=%d MOSI=%d\n",
+                  PIN_SD_CS, PIN_SD_SCK, PIN_SD_MISO, PIN_SD_MOSI);
+
+    // Method 1: Try SPI mode first
+    SD.end();
+    delay(100);
     sdSPI.begin(PIN_SD_SCK, PIN_SD_MISO, PIN_SD_MOSI, PIN_SD_CS);
-    if (!SD.begin(PIN_SD_CS, sdSPI)) {
-        Serial.println("[LOG] SD card init failed");
-        return false;
+    delay(100);
+
+    if (SD.begin(PIN_SD_CS, sdSPI, 4000000)) {
+        Serial.printf("[LOG] SD SPI mode OK! Size: %lluMB\n", SD.cardSize() / (1024 * 1024));
+    } else {
+        Serial.println("[LOG] SD SPI failed, trying SD_MMC 1-bit mode...");
+        SD.end();
+        delay(100);
+
+        // Method 2: Try SD_MMC 1-bit mode
+        // In 1-bit mode: CLK=SCK, CMD=MOSI, D0=MISO
+        SD_MMC.setPins(PIN_SD_SCK, PIN_SD_MOSI, PIN_SD_MISO);
+        if (SD_MMC.begin("/sdcard", true)) {  // true = 1-bit mode
+            useMMC = true;
+            Serial.printf("[LOG] SD_MMC 1-bit mode OK! Size: %lluMB\n",
+                          SD_MMC.cardSize() / (1024 * 1024));
+        } else {
+            Serial.println("[LOG] SD card init failed (SPI and MMC)");
+            return false;
+        }
     }
 
     int idx = findNextIndex();
@@ -46,7 +75,7 @@ bool loggerInit() {
     snprintf(csvName, sizeof(csvName), "/log_%04d.csv", idx);
     snprintf(jsonlName, sizeof(jsonlName), "/field_%04d.jsonl", idx);
 
-    logFile = SD.open(csvName, FILE_WRITE);
+    logFile = useMMC ? SD_MMC.open(csvName, FILE_WRITE) : SD.open(csvName, FILE_WRITE);
     if (!logFile) {
         Serial.printf("[LOG] Failed to create %s\n", csvName);
         return false;
@@ -54,7 +83,7 @@ bool loggerInit() {
     logFile.println(CSV_HEADER);
     logFile.flush();
 
-    jsonlFile = SD.open(jsonlName, FILE_WRITE);
+    jsonlFile = useMMC ? SD_MMC.open(jsonlName, FILE_WRITE) : SD.open(jsonlName, FILE_WRITE);
     if (jsonlFile) {
         Serial.printf("[LOG] Field test JSONL: %s\n", jsonlName);
     }

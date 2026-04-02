@@ -33,11 +33,11 @@ static const int PIN_COMPASS_SCL = 10;
 static const int PIN_GPS_RX = 44;
 static const int PIN_GPS_TX = 43;
 
-// SD card SPI — separate bus from LoRa
+// SD card SPI — separate bus from LoRa (T3S3 v1.3 hardware doc)
 static const int PIN_SD_CS   = 13;
 static const int PIN_SD_SCK  = 14;
 static const int PIN_SD_MISO = 2;
-static const int PIN_SD_MOSI = 15;
+static const int PIN_SD_MOSI = 11;
 
 // Status LED and button
 static const int PIN_LED  = 37;
@@ -126,11 +126,11 @@ static const int PIN_COMPASS_SCL = 10;
 static const int PIN_GPS_RX = 44;
 static const int PIN_GPS_TX = 43;
 
-// SD card SPI
+// SD card SPI (T3S3 v1.3 hardware doc)
 static const int PIN_SD_CS   = 13;
 static const int PIN_SD_SCK  = 14;
 static const int PIN_SD_MISO = 2;
-static const int PIN_SD_MOSI = 15;
+static const int PIN_SD_MOSI = 11;  // was 15 (wrong)
 
 // Status LED and button
 static const int PIN_LED  = 37;
