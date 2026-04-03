@@ -34,6 +34,7 @@ struct CadFskResult {
 
 void cadScannerInit();
 bool cadWarmupComplete();
+void resetDiversityTracker();
 
 // Run the full fishing pole scan cycle.
 // Called from loRaScanTask every cycle. rssi may be nullptr if no RSSI data yet.
