@@ -80,6 +80,7 @@ struct AmbientTap {
     uint8_t  sf;
     uint16_t firstSeenCycle;
     bool     active;
+    bool     learnedDuringWarmup;  // true = warmup, false = auto-learned
 };
 
 static AmbientTap ambientTaps[MAX_AMBIENT_TAPS];
@@ -98,15 +99,30 @@ static bool isAmbientCadSource(float freq, uint8_t sf) {
     return false;
 }
 
-static void recordAmbientTap(float freq, uint8_t sf) {
+static void recordAmbientTap(float freq, uint8_t sf, bool duringWarmup = false) {
     if (isAmbientCadSource(freq, sf)) return;
     if (ambientTapCount < MAX_AMBIENT_TAPS) {
         ambientTaps[ambientTapCount].frequency = freq;
         ambientTaps[ambientTapCount].sf = sf;
         ambientTaps[ambientTapCount].firstSeenCycle = warmupCycleCount;
         ambientTaps[ambientTapCount].active = true;
+        ambientTaps[ambientTapCount].learnedDuringWarmup = duringWarmup;
         ambientTapCount++;
     }
+}
+
+// Check if freq/SF was identified as ambient during the initial warmup period
+// (not auto-learned later). Used to filter diversity recording.
+static bool isWarmupAmbient(float freq, uint8_t sf) {
+    for (int i = 0; i < MAX_AMBIENT_TAPS; i++) {
+        if (ambientTaps[i].active &&
+            ambientTaps[i].learnedDuringWarmup &&
+            ambientTaps[i].sf == sf &&
+            fabsf(ambientTaps[i].frequency - freq) <= AMBIENT_FREQ_TOLERANCE) {
+            return true;
+        }
+    }
+    return false;
 }
 
 // ── Frequency Diversity Tracker ──────────────────────────────────────────────
@@ -157,6 +173,16 @@ static void recordDiversityHit(float freq, uint8_t sf) {
     diversitySlots[bestSlot].active = true;
 }
 
+static void pruneExpiredDiversity() {
+    unsigned long now = millis();
+    for (int i = 0; i < MAX_DIVERSITY_SLOTS; i++) {
+        if (diversitySlots[i].active &&
+            (now - diversitySlots[i].lastHitMs) >= DIVERSITY_WINDOW_MS) {
+            diversitySlots[i].active = false;
+        }
+    }
+}
+
 static int countDiversity(unsigned long windowMs) {
     unsigned long now = millis();
     int count = 0;
@@ -173,6 +199,10 @@ static int countDiversity(unsigned long windowMs) {
 
 bool cadWarmupComplete() {
     return warmupComplete;
+}
+
+void resetDiversityTracker() {
+    memset(diversitySlots, 0, sizeof(diversitySlots));
 }
 
 void cadScannerInit() {
@@ -315,6 +345,9 @@ CadFskResult cadFskScan(LR1121& radio, uint32_t cycleNum, const ScanResult* rssi
 CadFskResult cadFskScan(SX1262& radio, uint32_t cycleNum, const ScanResult* rssi) {
     CadFskResult result = {0, 0, 0, 0, 0, 0};
 
+    // Housekeeping: prune expired diversity slots
+    pruneExpiredDiversity();
+
     // Switch from FSK to LoRa packet type via low-level SPI command
     switchToLoRa(radio);
 
@@ -327,7 +360,7 @@ CadFskResult cadFskScan(SX1262& radio, uint32_t cycleNum, const ScanResult* rssi
         radio.setFrequency(tapList[i].frequency);
         if (radio.scanChannel(cfg) == RADIOLIB_LORA_DETECTED) {
             tapHit(&tapList[i]);
-            if (warmupComplete)
+            if (warmupComplete && !isWarmupAmbient(tapList[i].frequency, tapList[i].sf))
                 recordDiversityHit(tapList[i].frequency, tapList[i].sf);
         } else {
             bool adjHit = false;
@@ -338,7 +371,7 @@ CadFskResult cadFskScan(SX1262& radio, uint32_t cycleNum, const ScanResult* rssi
                     radio.setFrequency(adjFreq);
                     if (radio.scanChannel(cfg) == RADIOLIB_LORA_DETECTED) {
                         tapHit(&tapList[i]);
-                        if (warmupComplete)
+                        if (warmupComplete && !isWarmupAmbient(adjFreq, tapList[i].sf))
                             recordDiversityHit(adjFreq, tapList[i].sf);
                         adjHit = true;
                         break;
@@ -383,7 +416,7 @@ CadFskResult cadFskScan(SX1262& radio, uint32_t cycleNum, const ScanResult* rssi
                     CadTap* existing = findTap(freq, 6);
                     if (existing) tapHit(existing);
                     else addTap(freq, 6);
-                    if (warmupComplete)
+                    if (warmupComplete && !isWarmupAmbient(freq, 6))
                         recordDiversityHit(freq, 6);
                 }
                 guidedScans++;
@@ -431,7 +464,7 @@ CadFskResult cadFskScan(SX1262& radio, uint32_t cycleNum, const ScanResult* rssi
             if (radio.scanChannel(cfg) == RADIOLIB_LORA_DETECTED) {
                 CadTap* existing = findTap(freq, sc.sf);
                 if (!existing) addTap(freq, sc.sf);
-                if (warmupComplete)
+                if (warmupComplete && !isWarmupAmbient(freq, sc.sf))
                     recordDiversityHit(freq, sc.sf);
             }
         }
@@ -520,16 +553,13 @@ CadFskResult cadFskScan(SX1262& radio, uint32_t cycleNum, const ScanResult* rssi
             // intermittent and may not accumulate consecutive hits in time.
             for (int i = 0; i < MAX_TAPS; i++) {
                 if (tapList[i].active && !tapList[i].isFsk) {
-                    recordAmbientTap(tapList[i].frequency, tapList[i].sf);
+                    recordAmbientTap(tapList[i].frequency, tapList[i].sf, true);
                 }
             }
         }
     }
 
-    // Post-warmup continuous ambient learning:
-    // Infrastructure LoRa sources transmit on fixed frequencies indefinitely.
-    // Drone FHSS taps are short-lived per-frequency (3 misses → deactivated).
-    // Any confirmed tap alive for 30+ seconds on a fixed frequency is infrastructure.
+    // Post-warmup continuous ambient learning (auto-learned, NOT warmup):
     if (warmupComplete) {
         unsigned long now = millis();
         for (int i = 0; i < MAX_TAPS; i++) {
@@ -537,15 +567,11 @@ CadFskResult cadFskScan(SX1262& radio, uint32_t cycleNum, const ScanResult* rssi
                 !tapList[i].isFsk &&
                 tapList[i].consecutiveHits >= TAP_CONFIRM_HITS &&
                 !isAmbientCadSource(tapList[i].frequency, tapList[i].sf)) {
-                // Taps first seen during warmup: auto-add
                 if (tapList[i].firstSeenMs < AMBIENT_WARMUP_MS) {
-                    recordAmbientTap(tapList[i].frequency, tapList[i].sf);
+                    recordAmbientTap(tapList[i].frequency, tapList[i].sf, true);
                 }
-                // Taps alive 10+ seconds post-warmup: auto-learn as ambient.
-                // FHSS drone taps expire in ~3 cycles ≈ 2s per frequency (drone hops
-                // away). Infrastructure persists on fixed frequencies for minutes+.
                 else if ((now - tapList[i].firstSeenMs) > AMBIENT_AUTOLEARN_MS) {
-                    recordAmbientTap(tapList[i].frequency, tapList[i].sf);
+                    recordAmbientTap(tapList[i].frequency, tapList[i].sf, false);
                 }
             }
         }

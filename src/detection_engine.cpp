@@ -90,6 +90,7 @@ static ThreatLevel currentThreat = THREAT_CLEAR;
 static unsigned long lastThreatEventMs = 0;
 // COOLDOWN_MS from sentry_config.h
 static int cleanCycleCount = 0;
+static unsigned long clearSinceMs = 0;
 
 // ── Noise floor calculation ─────────────────────────────────────────────────
 
@@ -542,6 +543,18 @@ static ThreatLevel assessThreat(const IntegrityStatus& integrity) {
         }
     } else {
         cleanCycleCount = 0;
+    }
+
+    // Sustained-CLEAR diversity reset: if CLEAR for 60 continuous seconds,
+    // reset the diversity tracker to prevent slow drift on LoRa-rich bench.
+    if (desired == THREAT_CLEAR && currentThreat == THREAT_CLEAR) {
+        if (clearSinceMs == 0) clearSinceMs = now;
+        else if ((now - clearSinceMs) > 60000) {
+            resetDiversityTracker();
+            clearSinceMs = now;
+        }
+    } else {
+        clearSinceMs = 0;
     }
 
     // Emit events on change
