@@ -23,7 +23,7 @@ SENTRY-RF is a pocket-sized ($25-75 BOM) passive drone detector that identifies 
 
 ## Field Test Results (April 2026)
 
-Tested in rural North Carolina against [JUH-MAK-IN JAMMER](https://github.com/Seaforged/Juh-Mak-In-Jammer) ELRS transmitter:
+Tested in rural area against [JUH-MAK-IN JAMMER](https://github.com/Seaforged/Juh-Mak-In-Jammer) ELRS transmitter:
 
 | Test | TX Power | Range | Pd (div>=3) | Max div |
 |------|----------|-------|-------------|---------|
