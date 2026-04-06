@@ -1,5 +1,5 @@
 # SENTRY-RF Known Issues & Unfinished Work Tracker
-## As of April 5, 2026 — Post-AAD Sprint 1 (v1.5.0)
+## As of April 6, 2026 — v1.5.1
 
 This document tracks every identified issue, limitation, and unfinished item. Nothing gets forgotten. Check items off as they're resolved. Reference this before every sprint.
 
@@ -28,11 +28,10 @@ This document tracks every identified issue, limitation, and unfinished item. No
 **Bench validation:** Baseline holds CLEAR with sustainedCycles max 1, persDiv=0, score=5. ELRS FHSS detection reaches CRITICAL in 6.6s with persDiv=32, score=100.  
 **Resolved:** April 5, 2026 (v1.5.0).
 
-### [ ] LED alert system still disabled
-**Impact:** No visual alert for the operator. The device is serial-output-only for threat indication.  
-**Root cause:** Originally disabled because ambient ISM traffic caused false CRITICAL. Now that the detection engine is redesigned, LED should be re-evaluated.  
-**Fix:** Re-enable LED in `alert_handler.cpp` and test with current detection thresholds.  
-**Dependency:** Should be validated during or after field testing when thresholds are finalized.
+### [x] LED alert system still disabled — RESOLVED
+**Impact:** No visual alert for the operator.  
+**Fix:** Re-enabled in commit `0114cf0` with threat-level blink patterns: CLEAR=off, ADVISORY=slow blink (500ms), WARNING=fast blink (200ms), CRITICAL=solid on. Non-blocking millis() timing. Safe to enable now that AAD persistence gate eliminates false alarms.  
+**Resolved:** April 6, 2026 (v1.5.1).
 
 ---
 
@@ -49,11 +48,11 @@ This document tracks every identified issue, limitation, and unfinished item. No
 **Remaining risk:** Dense urban environments with many simultaneous LoRaWAN gateways could theoretically sustain div>=3 for 3+ cycles. Not yet tested in urban deployment. AAD Sprint 2 (continuous ambient catalog) would further mitigate this.  
 **Mitigated:** April 5, 2026.
 
-### [ ] Long-running bench degradation
-**Impact:** After 60-90+ seconds of runtime on a LoRa-rich bench, ambient state accumulates enough to cause false WARNING/CRITICAL. Post-warmup reset only fires once.  
-**Root cause:** Continuous ambient LoRa sources produce new non-ambient CAD taps faster than the auto-learn (60s) can absorb them.  
-**Possible fix:** Periodic state reset every N minutes, or continuous diversity baseline recalculation.  
-**Field relevance:** May not exist outdoors. Needs field validation.
+### [x] Long-running bench degradation — MITIGATED
+**Impact:** After 60-90+ seconds on a LoRa-rich bench, ambient state accumulated causing false escalation.  
+**Mitigation:** AAD sustained-diversity persistence gate (v1.5.0) prevents ambient diversity from triggering escalation. Tap prune on sustained-diversity drop (commit `66b5501`) aggressively clears confirmed taps when a drone departs, preventing stale state from accumulating across detection cycles. Cooldown reduced from 15s to 5s per level for faster return to CLEAR.  
+**Remaining risk:** Not tested beyond ~2 hours continuous runtime. Very long deployments may still accumulate edge-case state.  
+**Mitigated:** April 6, 2026.
 
 ### [ ] ELRS detection time varies significantly (2s to 48s across sprints)
 **Impact:** The operator can't predict how quickly the system will alert.  
@@ -175,5 +174,5 @@ This document tracks every identified issue, limitation, and unfinished item. No
 
 ---
 
-*Last updated: April 5, 2026 — post-AAD Sprint 1 (v1.5.0)*
+*Last updated: April 6, 2026 — v1.5.1 (AAD + LED + fast response)*
 *Review this document before every sprint.*
