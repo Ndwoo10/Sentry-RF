@@ -124,7 +124,8 @@ static void loRaScanTask(void* param) {
                                 cadFsk.strongPendingCad, cadFsk.totalActiveTaps,
                                 cadFsk.diversityCount,
                                 cadFsk.persistentDiversityCount,
-                                cadFsk.diversityVelocity);
+                                cadFsk.diversityVelocity,
+                                cadFsk.sustainedCycles);
 
         unsigned long cadDone = millis();
 
@@ -274,6 +275,8 @@ static void gpsReadTask(void* param) {
     CompassData localCompass = {};
     localCompass.scaleX = localCompass.scaleY = localCompass.scaleZ = 1.0f;
     localCompass.peakRSSI = -200.0f;
+    unsigned long lastGpsPrintMs = 0;
+    const unsigned long GPS_PRINT_INTERVAL_MS = 5000;
 
     for (;;) {
         gpsProcess();
@@ -302,14 +305,18 @@ static void gpsReadTask(void* param) {
             xSemaphoreGive(stateMutex);
         }
 
-        // Print outside state lock but inside serial lock
-        if (localGps.valid && xSemaphoreTake(serialMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        // Rate-limited serial output — GPS/integrity every 5s to prevent
+        // serial buffer overflow during long soak tests
+        unsigned long now = millis();
+        if (localGps.valid && (now - lastGpsPrintMs >= GPS_PRINT_INTERVAL_MS) &&
+            xSemaphoreTake(serialMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
             gpsPrintStatus(localGps);
             integrityPrintStatus(localIntegrity, localGps);
             if (localCompass.valid) {
                 Serial.printf("[COMPASS] HDG:%.0f° %s\n", localCompass.heading, localCompass.directionStr);
             }
             xSemaphoreGive(serialMutex);
+            lastGpsPrintMs = now;
         }
 
         vTaskDelay(pdMS_TO_TICKS(10));

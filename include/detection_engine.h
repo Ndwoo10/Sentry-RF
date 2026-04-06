@@ -12,7 +12,8 @@ void detectionEngineInit();
 // Called from loRaScanTask after CAD/FSK scans complete.
 void detectionEngineSetCadFsk(int cadCount, int fskCount, int strongPendingCad = 0,
                               int activeTaps = 0, int diversityCount = 0,
-                              int persistentDiversity = 0, int diversityVelocity = 0);
+                              int persistentDiversity = 0, int diversityVelocity = 0,
+                              int sustainedCycles = 0);
 
 // Run detection pipeline: peak extraction → freq matching → persistence → threat FSM.
 // Called from loRaScanTask after each sweep. NOT thread-safe — single caller only.
