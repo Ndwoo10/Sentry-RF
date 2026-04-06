@@ -24,7 +24,7 @@ static const int   PERSIST_THRESHOLD     = 3;       // consecutive sweeps to con
 static const int   MAX_PROTO_TRACKED     = 14;      // max tracked protocol signatures
 
 // ── Threat Timing ─────────────────────────────────────────────────────
-static const unsigned long COOLDOWN_MS   = 15000;   // ms before threat decays one level (was 30000)
+static const unsigned long COOLDOWN_MS   = 5000;    // ms before threat decays one level (was 15000)
 static const int RSSI_SWEEP_INTERVAL     = 3;       // run RSSI sweep every Nth CAD cycle
 
 // ── Rapid-Clear Path ──────────────────────────────────────────────────
@@ -105,6 +105,11 @@ static const int WEIGHT_REMOTE_ID          = 20;   // WiFi Remote ID detected
 static const int SCORE_ADVISORY            = 8;    // score threshold for ADVISORY
 static const int SCORE_WARNING             = 24;   // score threshold for WARNING (div=3 → 3×8)
 static const int SCORE_CRITICAL            = 40;   // score threshold for CRITICAL (div=5 → 5×8)
+
+// ── Fast-Detect Scoring Bonus ────────────────────────────────────────
+static const uint8_t FAST_DETECT_MIN_DIVERSITY = 5;  // raw diversity threshold for fast path
+static const uint8_t FAST_DETECT_MIN_CONF      = 1;  // confirmed CAD taps for fast path
+static const uint8_t WEIGHT_FAST_DETECT        = 20; // bonus points when both thresholds met
 
 // ── Buzzer / Alert ────────────────────────────────────────────────────
 static const unsigned long MUTE_DURATION_MS  = 300000; // 5 minutes
