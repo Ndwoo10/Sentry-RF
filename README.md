@@ -180,7 +180,7 @@ After the 50-second ambient warmup, the system holds CLEAR with `persDiv=0` and 
 
 ## Field Test Results
 
-Tested April 2026 in rural North Carolina against [JUH-MAK-IN JAMMER](https://github.com/Seaforged/Juh-Mak-In-Jammer) ELRS transmitter (SF6/BW500, 80-channel FHSS, 200 Hz):
+Tested April 2026 in a rural area against [JUH-MAK-IN JAMMER](https://github.com/Seaforged/Juh-Mak-In-Jammer) ELRS transmitter (SF6/BW500, 80-channel FHSS, 200 Hz):
 
 | Test | TX Power | Range | Detection Probability | Max Diversity |
 |------|----------|-------|-----------------------|---------------|
