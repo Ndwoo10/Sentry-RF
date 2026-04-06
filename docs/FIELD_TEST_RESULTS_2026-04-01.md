@@ -1,6 +1,6 @@
 # SENTRY-RF Field Test Results
 **Date:** April 1, 2026
-**Location:** Rural North Carolina, USA
+**Location:** Rural area, USA
 **Firmware:** v1.4.0 with field-calibrated diversity thresholds (WARNING=3, CRITICAL=5)
 
 ## Equipment
