@@ -44,6 +44,7 @@ static int totalActiveTapsThisCycle = 0;
 static int diversityCountThisCycle = 0;
 static int persistentDiversityThisCycle = 0;
 static int diversityVelocityThisCycle = 0;
+static int sustainedDiversityCyclesThisCycle = 0;
 
 // ── Band energy trending (902-928 MHz) ──────────────────────────────────
 // Tracks average RSSI across US band to detect aggregate FHSS energy rise.
@@ -475,9 +476,12 @@ static ThreatLevel assessThreat(const IntegrityStatus& integrity) {
     }
 
     // Fast-detect: high PERSISTENT diversity + confirmed tap = unmistakable drone
-    // Uses persistent diversity (not raw) to prevent ambient LoRa from triggering
+    // Uses persistent diversity (not raw) to prevent ambient LoRa from triggering.
+    // Requires sustainedCycles beyond the persistence gate — ambient that barely
+    // passes the gate for 1-2 cycles won't get the +20 bonus.
     if (persistentDiversityThisCycle >= FAST_DETECT_MIN_DIVERSITY &&
-        cadDetectionsThisCycle >= FAST_DETECT_MIN_CONF) {
+        cadDetectionsThisCycle >= FAST_DETECT_MIN_CONF &&
+        sustainedDiversityCyclesThisCycle > PERSISTENCE_MIN_CONSECUTIVE) {
         score += WEIGHT_FAST_DETECT;
     }
 
@@ -636,6 +640,7 @@ void detectionEngineInit() {
     diversityCountThisCycle = 0;
     persistentDiversityThisCycle = 0;
     diversityVelocityThisCycle = 0;
+    sustainedDiversityCyclesThisCycle = 0;
     memset(bandEnergyHistoryUS, 0, sizeof(bandEnergyHistoryUS));
     memset(bandEnergyHistoryEU, 0, sizeof(bandEnergyHistoryEU));
     bandEnergyIdxUS = 0; bandEnergySamplesUS = 0; bandEnergyElevatedUS = false;
@@ -651,7 +656,8 @@ int detectionEngineGetScore() { return (lastScore > 100) ? 100 : lastScore; }
 
 void detectionEngineSetCadFsk(int cadCount, int fskCount, int strongPendingCad,
                               int activeTaps, int diversityCount,
-                              int persistentDiversity, int diversityVelocity) {
+                              int persistentDiversity, int diversityVelocity,
+                              int sustainedCycles) {
     cadDetectionsThisCycle = cadCount;
     fskDetectionsThisCycle = fskCount;
     strongPendingCadThisCycle = strongPendingCad;
@@ -659,6 +665,7 @@ void detectionEngineSetCadFsk(int cadCount, int fskCount, int strongPendingCad,
     diversityCountThisCycle = diversityCount;
     persistentDiversityThisCycle = persistentDiversity;
     diversityVelocityThisCycle = diversityVelocity;
+    sustainedDiversityCyclesThisCycle = sustainedCycles;
 }
 
 ThreatLevel detectionEngineUpdate(const ScanResult& scan, const GpsData& gps,
