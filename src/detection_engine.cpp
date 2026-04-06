@@ -467,9 +467,9 @@ static ThreatLevel assessThreat(const IntegrityStatus& integrity) {
     score += cadDetectionsThisCycle * WEIGHT_CAD_CONFIRMED;
     score += fskDetectionsThisCycle * WEIGHT_FSK_CONFIRMED;
 
-    // Fast-detect: high raw diversity + confirmed tap = unmistakable drone
-    // Pushes past WARNING threshold on first strong detection cycle
-    if (diversityCountThisCycle >= FAST_DETECT_MIN_DIVERSITY &&
+    // Fast-detect: high PERSISTENT diversity + confirmed tap = unmistakable drone
+    // Uses persistent diversity (not raw) to prevent ambient LoRa from triggering
+    if (persistentDiversityThisCycle >= FAST_DETECT_MIN_DIVERSITY &&
         cadDetectionsThisCycle >= FAST_DETECT_MIN_CONF) {
         score += WEIGHT_FAST_DETECT;
     }

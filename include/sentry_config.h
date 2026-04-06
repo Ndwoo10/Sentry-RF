@@ -57,7 +57,7 @@ static const unsigned long AMBIENT_WARMUP_MS      = 50000;  // ms warmup time
 static const unsigned long AMBIENT_EARLY_EXIT_MS  = 20000;  // ms minimum before early exit
 static const int   MAX_AMBIENT_TAPS               = 32;     // max ambient tap entries
 static const float AMBIENT_FREQ_TOLERANCE         = 0.2f;   // +/-MHz match window
-static const unsigned long AMBIENT_AUTOLEARN_MS   = 60000;  // ms before confirmed tap auto-learned (was 10s)
+static const unsigned long AMBIENT_AUTOLEARN_MS   = 15000;  // ms before confirmed tap auto-learned (was 60s)
 
 // ── FSK Detection (Crossfire/FrSky) ──────────────────────────────────
 static const float FSK_DETECT_THRESHOLD_DBM = -50.0f;  // dBm — bench safe (field: lower to -70)
