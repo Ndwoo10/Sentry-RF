@@ -467,6 +467,13 @@ static ThreatLevel assessThreat(const IntegrityStatus& integrity) {
     score += cadDetectionsThisCycle * WEIGHT_CAD_CONFIRMED;
     score += fskDetectionsThisCycle * WEIGHT_FSK_CONFIRMED;
 
+    // Fast-detect: high raw diversity + confirmed tap = unmistakable drone
+    // Pushes past WARNING threshold on first strong detection cycle
+    if (diversityCountThisCycle >= FAST_DETECT_MIN_DIVERSITY &&
+        cadDetectionsThisCycle >= FAST_DETECT_MIN_CONF) {
+        score += WEIGHT_FAST_DETECT;
+    }
+
     // Supporting: RSSI persistence
     int freqUS = countPersistentDroneUS();
     int protoUS = countPersistentProtocolUS();
