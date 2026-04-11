@@ -416,6 +416,9 @@ static void emitProtoEvent(const ProtoTracker& pt, uint8_t severity) {
 }
 
 static void emitCadEvent(float freq, uint8_t sf, uint8_t severity) {
+    // CAD detection is multi-channel — no single representative frequency
+    // at the event-emit site, so freq is typically 0. Description omits
+    // the "@ X MHz" suffix to avoid printing "@ 0.0 MHz" in alert logs.
     DetectionEvent event = {};
     event.source = DET_SOURCE_RF;
     event.severity = severity;
@@ -423,11 +426,12 @@ static void emitCadEvent(float freq, uint8_t sf, uint8_t severity) {
     event.rssi = 0;
     event.timestamp = millis();
     snprintf(event.description, sizeof(event.description),
-             "CAD LoRa SF%d/BW500 @ %.1f MHz", sf, freq);
+             "CAD LoRa SF%d/BW500", sf);
     xQueueSend(detectionQueue, &event, 0);
 }
 
 static void emitFskEvent(float freq, uint8_t severity) {
+    // FSK detection is also multi-channel — see emitCadEvent note above.
     DetectionEvent event = {};
     event.source = DET_SOURCE_RF;
     event.severity = severity;
@@ -435,7 +439,7 @@ static void emitFskEvent(float freq, uint8_t severity) {
     event.rssi = 0;
     event.timestamp = millis();
     snprintf(event.description, sizeof(event.description),
-             "FSK 85k1 preamble @ %.1f MHz", freq);
+             "FSK 85k1 preamble");
     xQueueSend(detectionQueue, &event, 0);
 }
 
