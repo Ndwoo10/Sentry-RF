@@ -123,9 +123,10 @@ static const int PIN_OLED_VEXT = -1;
 static const int PIN_COMPASS_SDA = 21;
 static const int PIN_COMPASS_SCL = 10;
 
-// GPS UART1
-static const int PIN_GPS_RX = 44;
-static const int PIN_GPS_TX = 43;
+// GPS UART1 — LR1121 QWIIC connector reverses data pin order vs SX1262 sister board
+// White wire = GPS TX → IO43, Yellow wire = GPS RX → IO44
+static const int PIN_GPS_RX = 43;  // ESP32 listens here ← GPS TX (white)
+static const int PIN_GPS_TX = 44;  // ESP32 sends here  → GPS RX (yellow)
 
 // SD card SPI (T3S3 v1.3 hardware doc)
 static const int PIN_SD_CS   = 13;
@@ -158,8 +159,9 @@ static const bool WIFI_ENABLED  = true;
 
 // Common constants
 static const uint32_t OLED_I2C_ADDR  = 0x3C;
-static const uint32_t GPS_BAUD_DEFAULT = 9600;
-static const uint32_t GPS_BAUD_TARGET  = 38400;
+static const uint32_t GPS_BAUD_DEFAULT = 9600;    // u-blox factory default (M10QMC, NEO-M10)
+static const uint32_t GPS_BAUD_TARGET  = 38400;   // operational rate after bumpBaudRate()
+static const uint32_t GPS_BAUD_HGLRC   = 115200;  // HGLRC M100 Mini factory default
 
 // Buzzer configuration (common to all boards)
 static const int BUZZER_LEDC_CHANNEL    = 1;  // Channel 1 — LED uses digitalWrite, no conflict
