@@ -28,7 +28,16 @@ struct GpsData {
     int      satCnoCount;
 
     bool     valid;          // true if PVT data has been read at least once
+
+    // millis() of most recent MON-HW arrival (via SparkFun callback). 0 means
+    // MON-HW has never been received since boot. Used to gate UI on fresh data.
+    unsigned long monHwLastUpdateMs;
 };
+
+// Returns true if MON-HW data (jamInd, jammingState, agcPercent) was last
+// updated within the freshness window. Callers that display MON-HW fields
+// should gate on this to avoid showing stale/never-populated values as live.
+bool gpsMonHwIsFresh(const GpsData& data);
 
 // Initialize GPS on Serial1: configure UBX mode, bump baud to 38400
 bool gpsInit();

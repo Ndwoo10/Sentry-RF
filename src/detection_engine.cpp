@@ -392,9 +392,16 @@ static void emitEvent(const TrackedSignal& sig, uint8_t severity) {
     event.timestamp = millis();
 
     if (sig.match.protocol) {
+        // "(dev %.0fkHz)" removed: FreqMatch.deviationKHz is actually the
+        // channel-center OFFSET in kHz (how close the signal is to the
+        // nearest channel center), not the modulation frequency deviation
+        // that operators might expect. For channel-aligned signals it
+        // reads as "0kHz" which looked like broken data. Protocol + channel
+        // alone is the actionable info; the real frequency is shown in
+        // the alert_handler suffix.
         snprintf(event.description, sizeof(event.description),
-                 "%s ch%d (dev %.0fkHz)",
-                 sig.match.protocol->name, sig.match.channel, sig.match.deviationKHz);
+                 "%s ch%d",
+                 sig.match.protocol->name, sig.match.channel);
     } else {
         snprintf(event.description, sizeof(event.description),
                  "Unknown signal %.1f MHz", sig.frequency);
