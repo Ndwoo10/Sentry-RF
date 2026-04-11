@@ -99,14 +99,37 @@ bool gpsInit() {
     // The isAlreadyConfigured() fast path was removed because it skipped module-side
     // message output configuration, causing MON-HW to never populate (Jam:--- bug).
     // Satellite tracking state survives reconfiguration via RAM_BBR layer.
+
+    // Try 115200 first — HGLRC M100 Mini factory default per manufacturer spec
+    if (connectAtBaud(GPS_BAUD_HGLRC)) {
+        Serial.printf("[GPS] Connected at %d baud — configuring\n", GPS_BAUD_HGLRC);
+        if (!configureUBX()) return false;
+        // Step down to operational baud — lower CPU overhead during scan loops
+        if (!bumpBaudRate()) {
+            Serial.printf("[GPS] WARNING: running at %d — baud step-down failed\n", GPS_BAUD_HGLRC);
+            return true;
+        }
+        Serial.printf("[GPS] Baud reduced to %d\n", GPS_BAUD_TARGET);
+        return true;
+    }
+
+    // ESP32-S3 wedges UART1 if begin() is called twice without end() between
+    Serial1.end();
+    delay(10);
+    Serial1.setRxBufferSize(1024);
+
     if (connectAtBaud(GPS_BAUD_TARGET)) {
         Serial.printf("[GPS] Connected at %d baud — configuring\n", GPS_BAUD_TARGET);
         return configureUBX();
     }
 
-    // Fall back to factory default baud
+    Serial1.end();
+    delay(10);
+    Serial1.setRxBufferSize(1024);
+
+    // Fall back to u-blox factory default baud
     if (!connectAtBaud(GPS_BAUD_DEFAULT)) {
-        Serial.println("[GPS] FAIL: no response at 9600 or 38400");
+        Serial.println("[GPS] FAIL: no response at 115200, 38400, or 9600");
         return false;
     }
 
