@@ -175,14 +175,25 @@ void alertTask(void* param) {
         if (xQueueReceive(detectionQueue, &event, pdMS_TO_TICKS(100)) == pdTRUE) {
             ThreatLevel newLevel = (ThreatLevel)event.severity;
 
-            // Serial log
+            // Serial log — suppress (freq, rssi) suffix when fields are
+            // not populated. CAD/FSK/FHSS events often have freq=0 (multi-
+            // channel) and/or rssi=0 (not tracked in TrackedSignal yet).
+            // Valid RSSI is always negative in dBm, so rssi < 0 means real.
+            char suffix[40] = "";
+            if (event.frequency > 0.0f && event.rssi < 0.0f) {
+                snprintf(suffix, sizeof(suffix), " (%.1f MHz, %.1f dBm)",
+                         event.frequency, event.rssi);
+            } else if (event.frequency > 0.0f) {
+                snprintf(suffix, sizeof(suffix), " (%.1f MHz)", event.frequency);
+            } else if (event.rssi < 0.0f) {
+                snprintf(suffix, sizeof(suffix), " (%.1f dBm)", event.rssi);
+            }
             if (xSemaphoreTake(serialMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-                Serial.printf("[ALERT] %s %s: %s (%.1f MHz, %.1f dBm)\n",
+                Serial.printf("[ALERT] %s %s: %s%s\n",
                               severityStr(event.severity),
                               sourceStr(event.source),
                               event.description,
-                              event.frequency,
-                              event.rssi);
+                              suffix);
                 xSemaphoreGive(serialMutex);
             }
 
