@@ -33,6 +33,7 @@ Thumbs.db
 
 # Logs
 *.log
+test_output*.txt
 
 # Research/planning documents
 Research1 (1).md
