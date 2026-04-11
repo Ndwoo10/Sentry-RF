@@ -81,6 +81,42 @@ This document tracks every identified issue, limitation, and unfinished item. No
 **Fix:** Sprint 3/5 (commit `be1b007`) re-integrated band energy into confidence scoring at 8 dB threshold with `WEIGHT_BAND_ENERGY = 5`. Also added EU band (863-870 MHz) tracking.  
 **Resolved:** April 3, 2026.
 
+### [ ] Ambient confirmed-tap pathway reaches WARNING despite persistence gate — NEW v1.6.0 finding
+**Impact:** No-drone baseline can spike to `score=44` on a single cycle-burst of ambient activity, crossing the WARNING threshold (24) even with `PERSISTENCE_MIN_CONSECUTIVE=5` in place (v1.5.3 fix). This is a SEPARATE failure pathway from the diversity-sustained escalation that was closed in v1.5.0/v1.5.3.
+
+**Evidence** — April 11, 2026 Codex adversarial review ("Codex Run 1") flagged a baseline test log showing the anomaly at cycle 156:
+```
+cycle=155: conf=0 taps=4 div=4 persDiv=0 vel=0 sustainedCycles=1 score=5
+cycle=156: conf=1 taps=5 div=3 persDiv=3 vel=4 sustainedCycles=2 score=44  <- WARNING breach
+cycle=157: conf=1 taps=4 div=2 persDiv=0 vel=4 sustainedCycles=0 score=20
+```
+`persDiv` jumped from 0 to 3 at cycle 156 despite `sustainedCycles` being only 2 (below the gate threshold of 5). This means there is a `persDiv` update path in `detection_engine.cpp` outside the sustained-diversity gate — most likely the confirmed-tap pathway boosts `persDiv` when `conf >= 1` arrives, independent of `sustainedCycles` progression.
+
+**What was already verified:**
+- The `consecutiveHits >= 2` diversity gate recommended in `docs/FHSS_Discrimination_Research.md:178-184` is already enforced at multiple call sites in `src/cad_scanner.cpp` (lines 476-478, 489-491, 603-606, 803-805, 815-817, 957-959). This gate alone does NOT prevent the cycle-156 anomaly.
+- The v1.5.3 `PERSISTENCE_MIN_CONSECUTIVE=5` gate was tuned against the max sustainedCycles observed in 30-min soak (=2). The gate does the right thing for its specific pathway, but an alternate `persDiv` update path bypasses it.
+
+**Detection path that fires:** confirmed tap + transient diversity burst, not sustained diversity. The Sprint 2/3 soak tests measured `max persDiv over time` but not `single-cycle spikes triggered by conf increments`, so this was missed.
+
+**Root cause hypotheses (need verification in v1.6.1 audit):**
+1. `persDiv` is being updated from an inner code path (tap confirmation, velocity calc) that bypasses the `sustainedCycles` gate.
+2. The confirmed-tap scoring weight interacts with diversity scoring in a way that makes `conf=1` effectively amplify ambient diversity into WARNING territory.
+3. Velocity calculation (`vel=4` in the log) may be feeding back into `persDiv` via a path that doesn't check `sustainedCycles`.
+
+**Regression criterion for fix:** 30+ minute soak with no drone present must show zero cycles at or above WARNING (score < 24). v1.5.3 met this with `max score=19` on its specific ambient profile — the April 11 Codex review found a cycle-burst anomaly v1.5.3 testing did not catch.
+
+**Out of v1.6.0 scope:** SPEC explicitly excludes detection engine changes (`AAD gates, scoring weights, thresholds — these are field-calibrated and we don't tune them without data`). Tracked for v1.6.1.
+
+**Next steps (v1.6.1 sprint):**
+1. Audit `detection_engine.cpp` persDiv update paths — find the one that bypasses sustainedCycles
+2. Add a no-drone regression harness that asserts `max score < WARNING` over 1000+ cycles
+3. Review confirmed-tap scoring weight logic for interaction with transient diversity
+4. Consider adding a `conf` contribution gate that also requires sustainedCycles >= N before the confirmed-tap score contributes at full weight
+
+**References:**
+- `docs/FHSS_Discrimination_Research.md` — prior research, proposed consecutiveHits gate (already implemented)
+- Codex adversarial review output, April 11, 2026 (review ID `bnfw986as` in session logs)
+
 ---
 
 ## MEDIUM — Feature Gaps
@@ -187,5 +223,5 @@ This document tracks every identified issue, limitation, and unfinished item. No
 
 ---
 
-*Last updated: April 6, 2026 — v1.5.3 (persistence gate 5, 0.00% FP in 30-min soak, CRITICAL in 11.2s)*
+*Last updated: April 11, 2026 — v1.6.0-rc1+6 commits (added HIGH entry for ambient confirmed-tap pathway flagged by Codex Run 1 adversarial review)*
 *Review this document before every sprint.*
