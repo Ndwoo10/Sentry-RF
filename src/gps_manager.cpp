@@ -8,6 +8,24 @@ static SFE_UBLOX_GNSS_SERIAL gps;
 static unsigned long lastPollMs = 0;
 static const unsigned long GPS_POLL_INTERVAL_MS = 1000;
 
+// millis() of most recent MON-HW message arrival, set by the SparkFun
+// auto-callback registered in setupLibraryState(). Volatile because the
+// callback may fire from any task context running checkUblox().
+static volatile unsigned long g_monHwLastArrivalMs = 0;
+
+// Freshness window for MON-HW data — Dashboard and Integrity screens
+// gate their displayed jam/spoof/AGC fields on (now - lastArrival) < this.
+static const unsigned long MON_HW_FRESH_WINDOW_MS = 5000;
+
+static void onMonHwArrived(UBX_MON_HW_data_t* /*unused*/) {
+    g_monHwLastArrivalMs = millis();
+}
+
+bool gpsMonHwIsFresh(const GpsData& data) {
+    if (data.monHwLastUpdateMs == 0) return false;  // never populated
+    return (millis() - data.monHwLastUpdateMs) < MON_HW_FRESH_WINDOW_MS;
+}
+
 // Production C/N0 minimum — 15 dB-Hz rejects noise while keeping usable satellites.
 // GPS_MIN_CNO from sentry_config.h (15=field, 6=indoor bench)
 #include "sentry_config.h"
@@ -23,7 +41,10 @@ static bool connectAtBaud(uint32_t baud) {
 // This replaces blocking poll requests that were starving the GPS of processing time.
 static void setupLibraryState() {
     gps.setAutoPVT(true);
-    gps.setAutoMONHW(true);
+    // MON-HW via callback mode so we can timestamp each fresh arrival.
+    // The callback sets g_monHwLastArrivalMs; readMonHW() copies it into
+    // GpsData so the UI can gate display on freshness.
+    gps.setAutoMONHWcallbackPtr(&onMonHwArrived);
     gps.setAutoNAVSTATUS(true);
     gps.setAutoNAVSAT(true);
     gps.setPacketCfgPayloadSize(UBX_NAV_SAT_MAX_LEN);
@@ -159,6 +180,10 @@ static void readMonHW(GpsData& data) {
 
     // agcCnt is 0-8191 — scale to 0-100 for display
     data.agcPercent = (uint8_t)((hw.agcCnt * 100UL) / 8191);
+
+    // Propagate the most recent callback arrival time so UI can gate on
+    // freshness. 0 means no MON-HW has ever arrived since boot.
+    data.monHwLastUpdateMs = g_monHwLastArrivalMs;
 }
 
 static void readNavStatus(GpsData& data) {

@@ -1,6 +1,8 @@
 #include "display.h"
 #include "board_config.h"
 #include "alert_handler.h"
+#include "buzzer_manager.h"
+#include "gps_manager.h"
 #include "version.h"
 #include "splash_logo.h"
 #include <Arduino.h>
@@ -56,13 +58,17 @@ static const char* threatStr(ThreatLevel t) {
     }
 }
 
-// Unified buzzer state label across Dashboard, Threat, and System screens.
-// Priority: Off (no hardware) > MUTED > ACK'd > Active (WARNING+) > Armed.
-static const char* buzzerStateStr(const SystemState& state) {
+// Unified buzzer state label across Threat and System screens.
+// Priority: Off > MUTED > ACK'd > Active (actually sounding) > Armed.
+// "Active" is derived from buzzerIsPlaying() — real hardware state — so
+// the display reflects what the operator can actually hear, not a proxy
+// based on threat level. This does cause brief "Armed <-> Active" flicker
+// between beeps within a pattern, but that matches ground truth.
+static const char* buzzerStateStr() {
     if (!HAS_BUZZER) return "Off";
     if (alertIsMuted()) return "MUTED";
     if (alertIsAcknowledged()) return "ACK'd";
-    if (state.threatLevel >= THREAT_WARNING) return "Active";
+    if (buzzerIsPlaying()) return "Active";
     return "Armed";
 }
 
@@ -253,13 +259,20 @@ void screenDashboard(Adafruit_SSD1306& disp, const SystemState& state, int page)
     disp.setCursor(0, 22);
     if (gpsIsValid(state.gps)) {
         char buf[22];
-        // J: shows raw jamInd (0-255). jammingState is often stuck at 0
-        // ("unknown/disabled") on u-blox M10 MON-HW, so the categorized
-        // jammingStr() was showing misleading dashes. Raw jamInd is always
-        // populated when GPS is valid (which is already gated above).
-        snprintf(buf, sizeof(buf), "%s %dSV J:%d S:%s",
+        // J: shows raw jamInd (0-255) ONLY when MON-HW has arrived within
+        // the freshness window — otherwise "--" to distinguish "telemetry
+        // unavailable/stale" from a legitimate "no jamming" reading of 0.
+        // jammingState is often stuck at 0 on u-blox M10 MON-HW, which is
+        // why we use jamInd + freshness rather than jammingStr().
+        char jStr[6];
+        if (gpsMonHwIsFresh(state.gps)) {
+            snprintf(jStr, sizeof(jStr), "%d", state.gps.jamInd);
+        } else {
+            snprintf(jStr, sizeof(jStr), "--");
+        }
+        snprintf(buf, sizeof(buf), "%s %dSV J:%s S:%s",
                  fixTypeStr(state.gps.fixType), state.gps.numSV,
-                 state.gps.jamInd,
+                 jStr,
                  (state.gps.spoofDetState >= 2) ? "!" : "OK");
         disp.print(buf);
     } else {
@@ -475,7 +488,7 @@ void screenThreat(Adafruit_SSD1306& disp, const SystemState& state, int page) {
 
     // Buzzer status — unified Armed/Active/MUTED/ACK'd/Off via helper
     disp.setCursor(0, 42);
-    disp.printf("Buzzer: %s", buzzerStateStr(state));
+    disp.printf("Buzzer: %s", buzzerStateStr());
 
     // Bearing
     disp.setCursor(0, 52);
@@ -517,7 +530,7 @@ void screenSystem(Adafruit_SSD1306& disp, const SystemState& state, int page) {
     // Buzzer + compass status — unified buzzer label via helper
     disp.setCursor(0, 42);
     snprintf(buf, sizeof(buf), "Buz:%s Cmp:%s",
-             buzzerStateStr(state),
+             buzzerStateStr(),
              state.compass.valid ? "OK" : "--");
     disp.print(buf);
 
