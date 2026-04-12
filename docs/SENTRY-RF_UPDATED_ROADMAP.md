@@ -1,310 +1,247 @@
-# SENTRY-RF Updated Sprint Roadmap (Post Sprint 7)
+# SENTRY-RF Development Roadmap v3.0
+## Post v1.6.1-rc1 — Updated April 11, 2026
 
-## Current Status
-Sprints 1-7 complete. The system has:
-- Sub-GHz spectrum scanning (860-930 MHz) via SX1262
-- GNSS integrity monitoring (jamming/spoofing detection) via u-blox M10
-- FreeRTOS dual-core architecture (GPS on Core 0, LoRa on Core 1)
-- Detection engine with drone frequency matching and threat FSM
-- 5-screen OLED UI with button navigation
-- SD/SPIFFS logging
-- WiFi AP dashboard (toggle-able)
-- Firmware v0.7.0
+**This document supersedes:** All previous roadmaps including `SENTRY-RF_Phased_Improvement_Plan.md`, `LR1121_Development_Plan.md`, `SENTRY-RF_LR1121_Development_Plan.md`, the original Sprint Roadmap, and Roadmap v2.0.
 
-## Hardware Targets (Updated)
+**Current state:** v1.6.1-rc1 bench validated. Both SX1262 and LR1121 boards detect ELRS/Crossfire/SiK/Remote ID. 6/6 drone protocols reach WARNING+, 2/2 infrastructure tests pass FP check.
 
-### Existing boards (Sprints 1-7)
-| Board | Radio | Bands |
-|-------|-------|-------|
-| LilyGo T3S3 (SX1262) | SX1262 | 860-930 MHz only |
-| Heltec WiFi LoRa 32 V3 | SX1262 | 860-930 MHz only |
-
-### New primary board (Sprint 8+)
-| Board | Radio | Bands |
-|-------|-------|-------|
-| **LilyGo T3-S3 LR1121** | LR1121 | 150-960 MHz + 2400-2500 MHz (band-switching) |
-
-The T3-S3 LR1121 has the same ESP32-S3, same OLED (SSD1306 128x64, SDA=18, SCL=17), same SD card, same QWIIC, same form factor as the current T3S3. The LR1121 is pin-compatible with RadioLib's LR11x0 class and supports `GetRssiInst` on both sub-GHz and 2.4 GHz — enabling the exact same RSSI sweep technique used on sub-GHz today.
-
-**Key LR1121 capability:** The radio can switch between sub-GHz and 2.4 GHz bands in software. It cannot operate both bands simultaneously, but alternating sweeps (one sub-GHz, one 2.4 GHz) gives full dual-band coverage at ~1 second cycle time.
-
-### External compass module (QWIIC)
-QMC5883L or QMC6310 magnetometer connected via QWIIC/I2C on the T3S3's second I2C bus (Wire1, SDA=21, SCL=10). Provides heading data for directional indication of RF signal source when combined with RSSI-based bearing estimation.
+**Research basis:** `docs/SENTRY-RF_Research_Analysis.md` — 10 techniques evaluated from open-source counter-UAS projects. Decisions integrated below.
 
 ---
 
-## Sprint 8: LR1121 Dual-Band Scanning + 2.4 GHz Drone Detection
+## What's Done (Do Not Re-Plan)
 
-### Goal
-Add LR1121 board support with dual-band spectrum scanning (sub-GHz + 2.4 GHz), detect drone C2 links on both bands using RSSI energy detection, and add 2.4 GHz drone channel signatures to the detection engine.
-
-### Stage 1 — LR1121 board support
-- Add `BOARD_T3S3_LR1121` build environment to `platformio.ini`
-- Add LR1121 pin definitions to `board_config.h` (SPI pins may differ — check LilyGo schematic)
-- RadioLib supports LR1121 via the `LR1121` class (inherits from `LR11x0`)
-- The LR1121 requires firmware to be loaded on first use — RadioLib handles this, but verify
-- `scannerInit()` must detect which radio chip is present and initialize accordingly
-- Acceptance: `pio run -e t3s3_lr1121` compiles clean, radio initializes on both sub-GHz and 2.4 GHz
-
-### Stage 2 — Dual-band sweep
-- Modify `rf_scanner.cpp` to support alternating band sweeps:
-  - Sweep 1: 860-930 MHz (70 MHz, 100 kHz steps = 700 bins) — same as today
-  - Sweep 2: 2400-2500 MHz (100 MHz, 1 MHz steps = 100 bins) — coarser resolution but covers the full ISM band
-- The LR1121 band switch requires: `radio.setFrequency(freq)` — RadioLib handles the internal band switching automatically when frequency crosses the sub-GHz/2.4 GHz boundary
-- Store both sweep results in `SystemState` — add `ScanResult spectrum24` alongside existing `spectrum`
-- On SX1262 boards, the 2.4 GHz sweep is skipped (SX1262 can't do 2.4 GHz)
-- Acceptance: Serial output shows alternating sub-GHz and 2.4 GHz sweeps with real RSSI data
-
-### Stage 3 — 2.4 GHz drone channel database
-Add to `drone_signatures.cpp`:
-- **ELRS 2.4 GHz:** 80 channels, 2400-2480 MHz, 1 MHz spacing, SX1280 LoRa modulation
-- **DJI OcuSync 2.0/O3/O4:** Uses channels centered around 2.4 GHz (specific channels vary by region, but energy detection across 2400-2480 MHz catches them)
-- **FrSky ACCESS 2.4 GHz:** FHSS across 2400-2480 MHz
-- **TBS Tracer 2.4 GHz:** FHSS, 2400-2480 MHz
-- **Common WiFi channels:** Ch 1 (2412), Ch 6 (2437), Ch 11 (2462) — for distinguishing WiFi APs from drone signals
-
-The matching algorithm flags any 2.4 GHz energy that does NOT correspond to a known WiFi AP beacon (from the ESP32's WiFi scan list) as a potential drone signal.
-
-### Stage 4 — WiFi promiscuous mode for Remote ID
-Running simultaneously with the LR1121 2.4 GHz sweep (different hardware — ESP32 internal WiFi vs external LR1121 SPI radio):
-- WiFi in promiscuous mode captures 802.11 management frames
-- Parse Open Drone ID (ASTM F3411) from WiFi beacon vendor-specific IEs and NaN action frames
-- Use `opendroneid-core-c` library (add as lib dependency)
-- MAC OUI fingerprinting for known drone controllers (DJI 60:60:1F, Autel, Parrot, Skydio)
-- Channel hop across 1-13, 100ms dwell per channel
-- Runs as `WiFiScanTask` on Core 0
-
-### Stage 5 — Dashboard mode toggle
-- Default boot: Scanner mode (promiscuous WiFi + LR1121 dual-band sweep)
-- Hold BOOT button 5 seconds: Switch to Dashboard mode
-  - `esp_wifi_set_promiscuous(false)`
-  - `WiFi.softAP("SENTRY-RF", "sentryrf1")`
-  - Web server with JSON API + auto-refresh HTML
-  - OLED shows "DASHBOARD MODE" + IP
-- Visual countdown on OLED while holding button: "Dashboard in 5... 4... 3..."
-- Power cycle returns to scanner mode
-
-### Acceptance criteria
-- [ ] LR1121 board compiles and initializes radio on both bands
-- [ ] Dual-band sweep alternates sub-GHz and 2.4 GHz with real RSSI data
-- [ ] 2.4 GHz drone signatures matched by detection engine
-- [ ] WiFi Remote ID parsed via opendroneid-core-c
-- [ ] Dashboard mode activates on 5-second BOOT hold
-- [ ] All three existing boards still compile (SX1262 boards skip 2.4 GHz sweep)
+- ✅ FreeRTOS dual-core architecture (Core 0: GPS/WiFi, Core 1: LoRa)
+- ✅ Sub-GHz CAD scanning SF6-SF12 at BW500 (860-930 MHz, 80 channels at SF6)
+- ✅ FSK detection phase (Crossfire 85.1 kbps GFSK)
+- ✅ RSSI sweep (350 bins, every 3rd cycle)
+- ✅ Ambient warmup filter (32-tap learning, consecutiveHits≥2 gate)
+- ✅ FHSS frequency-spread tracker (v1.6.1 — 3-cycle rolling window, unique-freq threshold)
+- ✅ LR1121 CAD configuration fix (buildCadConfigLR with chip-appropriate detPeak)
+- ✅ LR1121 2.4 GHz CAD bandwidth fix (setBandwidth(812.5, true))
+- ✅ Protocol classifier (220+ signatures, ELRS/Crossfire/SiK/mLRS matching)
+- ✅ WiFi Remote ID detection (ASTM F3411 beacon parsing, promiscuous mode)
+- ✅ WiFi channel activity dashboard (13-channel bar chart)
+- ✅ GPS auto-baud detection (115200/38400/9600 with UART wedge fix)
+- ✅ GPS integrity monitoring (MON-HW jamming, spoofing detection, C/N0σ)
+- ✅ MON-HW freshness gating (SparkFun callback timestamp, 5s window)
+- ✅ Boot antenna self-test (soft-warn, per-board thresholds)
+- ✅ 7-screen OLED UI with field-by-field glossary
+- ✅ Threat scoring with weighted confidence and escalation state machine
+- ✅ Triple-target build (t3s3, heltec_v3, t3s3_lr1121)
+- ✅ JJ v2.0.0 bench validated (all drone protocols + infrastructure FP tests)
 
 ---
 
-## Sprint 9: Compass Integration + Directional Bearing
+## Phase 1: Detection Reliability (Next — v1.7.0)
 
-### Goal
-Integrate the QMC5883L/QMC6310 magnetometer via QWIIC I2C, compute magnetic heading, and provide directional bearing estimation for detected RF signals and GNSS anomalies.
+### 1.1 — Adaptive Noise Floor with Dual Time Constants
+**Problem:** LR1121 fills all 32 ambient tap slots during warmup with false CAD hits in 902-912 MHz. Real ELRS channels permanently suppressed. 50-second warmup delay.
+**Research:** wardragon-fpv-detect AUTO_THRESHOLD + dual time constant integrator.
+**Implementation:** IIR filter on RSSI sweep data — fast attack (α=0.5) when RSSI drops below floor, slow decay (α=0.05) when RSSI rises above. Prevents floor from tracking signals upward. Hybrid: keep existing ambient tap list as secondary filter for known-frequency infrastructure, add adaptive threshold as primary filter. CAD hit is ambient if EITHER filter flags it.
+**Effort:** ~50 lines. No new libraries.
+**Acceptance:** Detection starts from cycle 1. LR1121 ambient list no longer saturates. Infrastructure FP tests still pass.
 
-### Approach
-- Read magnetometer on Wire1 (SDA=21, SCL=10) — already initialized as `initCompassBus()` from Sprint 4
-- Library: QMC5883LCompass (Arduino) or direct I2C register reads
-- Compute heading from X/Y magnetometer axes (declination correction for local area)
-- **Directional RF bearing:** When a signal is detected on the sub-GHz or 2.4 GHz scan, log the heading at time of detection. If the user physically rotates the device, RSSI changes correlate with heading. The device can suggest "strongest signal at heading 270° (West)" by tracking peak RSSI vs heading over time. This is manual direction-finding — rotate the device and watch the RSSI peak indicator.
-- **GNSS jamming bearing:** If jamming is detected, log heading during the jamming event. Rotating the device toward/away from the jammer changes the AGC/jamInd values. Same rotate-and-peak technique.
-- Store heading in `GpsData` struct (or a new `CompassData` struct) and include in shared SystemState
+### 1.2 — mLRS Detection Improvement
+**Problem:** mLRS stays at ADVISORY (20 channels, narrow hop set, ambient-poisoned range).
+**Fix:** Re-test after 1.1 (adaptive NF should unblock 902-912 range). If still ADVISORY, lower FHSS_UNIQUE_THRESHOLD from 4 to 3 for narrow-hop protocols.
+**Effort:** Config change after 1.1. ~5 lines if threshold adjustment needed.
+**Acceptance:** mLRS reaches WARNING within 60s.
 
-### Acceptance criteria
-- [ ] Compass heading printed to serial: "Heading: 247°"
-- [ ] Heading displayed on GPS screen and Threat screen
-- [ ] Peak RF signal bearing tracked: "Strongest at 270° W"
-- [ ] Compass calibration routine (rotate device 360°) accessible via long-press or serial command
+### 1.3 — scanChannel() Error Checking
+**Problem:** Silent SPI errors treated as "channel free."
+**Fix:** Per-cycle error counter. Log warnings. Flag hardware fault if >50%.
+**Effort:** ~20 lines.
 
----
-
-## Sprint 10: UI Overhaul + Custom Splash Screen
-
-### Goal
-Redesign the OLED UI for field use with information-dense screens, add a custom SENTRY-RF logo splash screen, and create new dashboard-style summary screens.
-
-### New screen layout (128x64 OLED, 7 screens)
-
-**Screen 0 — Boot Splash:**
-Custom SENTRY-RF logo bitmap (user-designed). Displayed for 2 seconds on boot. Stored as a `const uint8_t PROGMEM` bitmap array in a header file. Convert the logo PNG to a 128x64 monochrome bitmap using image2cpp or similar tool.
-
-**Screen 1 — Dashboard Summary (new):**
-Single-screen overview of the entire system state:
-```
-┌────────────────────────────┐
-│ SENTRY-RF    ██ CLEAR ██   │  (threat level, inverted bar for WARNING+)
-│ Sub: ▁▂▃▅▇▅▃▂▁  2.4: ▂▅▇▅▂│  (mini spectrum bars for both bands)
-│ GPS:3D 9SV  Jam:OK Spf:OK │  (GPS + integrity one-liner)
-│ Batt:78% WiFi:SCAN HDG:247│  (battery + wifi mode + compass heading)
-└────────────────────────────┘
-```
-
-**Screen 2 — Sub-GHz Spectrum (existing, refined):**
-Bar chart 860-930 MHz with peak annotation and threat level.
-
-**Screen 3 — 2.4 GHz Spectrum (new):**
-Bar chart 2400-2500 MHz. Same rendering as sub-GHz but for the 2.4 GHz sweep. Only shown on LR1121 boards. On SX1262 boards, this screen shows "2.4 GHz: No radio" with a note to upgrade.
-
-**Screen 4 — GPS + Compass:**
-Position, fix, SVs, plus compass heading with a visual bearing indicator (small compass rose or arrow glyph).
-
-**Screen 5 — GNSS Integrity:**
-Jamming/spoofing status, C/N0 histogram, bearing to suspected jammer if rotating.
-
-**Screen 6 — Threat Detail:**
-Active detections with protocol match, frequency, RSSI, persistence count, bearing. Scrolls if multiple detections.
-
-**Screen 7 — System Info:**
-Version, uptime, free heap, battery voltage (ADC on GPIO 1), board name, WiFi mode (SCAN/AP/OFF), SD card status.
-
-### Battery monitoring
-- T3S3 has battery voltage on GPIO 1 via voltage divider
-- Read ADC, scale to battery voltage (3.0-4.2V for LiPo)
-- Display as percentage (3.0V=0%, 4.2V=100%, linear approximation is fine)
-
-### Page dots + button navigation
-- Same as Sprint 7: BOOT button cycles screens, auto-rotate after 5 seconds
-- Page dots at bottom center
-
-### Custom splash screen workflow
-1. User designs logo as PNG
-2. Convert to 128x64 monochrome bitmap using image2cpp (https://javl.github.io/image2cpp/)
-3. Paste resulting `const uint8_t` array into `include/splash_logo.h`
-4. `displayBootSplash()` draws the bitmap with `drawBitmap()` for 2 seconds, then transitions to normal screens
-
-### Acceptance criteria
-- [ ] Custom splash logo displays on boot
-- [ ] Dashboard summary screen shows all key data in one view
-- [ ] 2.4 GHz spectrum screen renders on LR1121, gracefully degrades on SX1262
-- [ ] Battery voltage displayed as percentage
-- [ ] All 8 screens render correctly and cycle via button
+### 1.4 — De-escalation "Last Seen" Display
+**Fix:** Add "LAST SEEN: Xs ago" to Threat OLED screen. Update operator docs with ~15s de-escalation timing.
+**Effort:** ~15 lines + docs.
 
 ---
 
-## Sprint 11: Field Hardening + Production Readiness
+## Phase 2: 2.4 GHz + Signal Intelligence (v1.7.0-v1.8.0)
 
-### Goal
-Harden the system for real field deployment. Fix edge cases, optimize power, validate detection accuracy.
+### 2.1 — ELRS 2.4 GHz First Light
+**Depends on:** RadioMaster ELRS TX arrival.
+**Test:** Validate BW800 CAD fix against real 2.4 GHz ELRS signal.
+**Acceptance:** CAD detects and escalates to WARNING.
 
-### Tasks
-- **Raise GPS_MIN_CNO to 15-20** for outdoor field use (currently 6 for indoor testing)
-- **Power management:** Deep sleep mode when idle, wake on button press or timer
-- **SD card log rotation:** Prevent filling the SD card on long deployments
-- **Watchdog monitoring:** Ensure all FreeRTOS tasks have proper watchdog feeding
-- **Detection accuracy validation:** Test with real drones (ELRS 900, ELRS 2.4, DJI) and document detection ranges
-- **False positive tuning:** Adjust noise floor thresholds, persistence counts, and cooldown timers based on real-world data
-- **README update:** Full documentation with photos, wiring diagrams, detection capabilities, limitations
+### 2.2 — Bandwidth Discrimination (DJI OcuSync Detection)
+**Research:** wardragon-fpv-detect MIN_BW_HZ concept.
+**Implementation:** `countElevatedAdjacentBins()` in rf_scanner.cpp. DJI OFDM = 20-40 adjacent bins. ELRS = 1-2 bins. WiFi = ~20 bins on fixed channels. New score weight `WEIGHT_OFDM_BANDWIDTH`.
+**Effort:** ~40 lines.
+**Acceptance:** DJI-style broadband signals flagged as "POSSIBLE_OFDM_2G4" on 2.4 GHz sweep.
 
-### Acceptance criteria
-- [ ] GPS_MIN_CNO raised to production value
-- [ ] System runs 8+ hours on battery without crash or watchdog reset
-- [ ] Detection validated against at least 2 real drone types
-- [ ] README complete with honest capability description
+### 2.3 — Full ASTM F3411 WiFi Remote ID Decoding
+**Research:** opendroneid/opendroneid-core-c v2.0 (BSD-3-Clause, ESP32-S3 tested).
+**Implementation:** Vendor libopendroneid/ (3 files, ~15-20 KB flash). Decode payload after OUI match in wifi_scanner.cpp. Extract: drone serial, GPS position, operator position, speed, heading, altitude. New "Remote ID" OLED screen (8th screen).
+**Effort:** ~100-150 lines + vendored library.
+**Test with:** JJ v2.0.0 `r` command.
+**Acceptance:** Drone serial number and position displayed on OLED from JJ RID beacons.
 
----
+### 2.4 — 2.4 GHz Protocol Classification
+Label CAD hits as "ELRS_2G4", "GHOST_2G4", "TRACER_2G4", or "LORA_2G4" based on frequency range, SF, hop pattern.
+**Effort:** ~40 lines in protocol classifier.
 
-## Key Technical Decisions
-
-### LR1121 band switching in the scan loop
-```
-for (;;) {
-    // Sub-GHz sweep: 860-930 MHz, 700 bins, ~500ms
-    radio.setFrequency(860.0);  // triggers band switch to sub-GHz internally
-    sweepSubGHz(radio, subGhzResult);
-    
-    // 2.4 GHz sweep: 2400-2500 MHz, 100 bins, ~100ms
-    radio.setFrequency(2400.0);  // triggers band switch to 2.4 GHz internally
-    sweep24GHz(radio, result24);
-    
-    // Copy both results to shared state under mutex
-    // Run detection engine on both
-}
-```
-
-### WiFi dual-mode architecture
-```
-Boot → Scanner Mode (default)
-  ├── ESP32 WiFi: promiscuous mode, channel hopping, Remote ID capture
-  ├── LR1121: alternating sub-GHz + 2.4 GHz RSSI sweeps
-  └── GPS: continuous GNSS integrity monitoring
-
-Hold BOOT 5s → Dashboard Mode
-  ├── ESP32 WiFi: AP mode, web server
-  ├── LR1121: continues scanning (independent SPI hardware)
-  └── GPS: continues monitoring
-```
-
-### Compass bearing estimation
-The device has a single omnidirectional antenna. True direction-finding requires multiple antennas or a rotating directional antenna. What we CAN do is **rotation-based bearing**: the user physically rotates the device while watching RSSI on the OLED. The compass tracks which heading corresponds to the strongest signal. This is the same technique used by amateur radio fox hunters with a handheld yagi — but with an omnidirectional antenna, the resolution is coarser (~±45°). Still useful for narrowing down "the signal is coming from the west" vs "the signal is coming from the east."
+### 2.5 — Per-Band Diversity Tracking
+Separate `diversitySub` (860-930 MHz) and `diversity24` (2400-2500 MHz). Either band independently triggers escalation. Both bands = highest confidence (dual-band correlation).
+**Effort:** ~60 lines.
 
 ---
 
-## Updated File Structure (Post Sprint 11)
-```
-SENTRY-RF/
-├── platformio.ini                 # 4 build envs: t3s3, heltec_v3, t3s3_lr1121, (heltec optional)
-├── include/
-│   ├── board_config.h             # Pin mappings for all boards including T3S3-LR1121
-│   ├── task_config.h              # FreeRTOS task parameters
-│   ├── detection_types.h          # Shared structs, enums, queue handles
-│   ├── drone_signatures.h         # Sub-GHz + 2.4 GHz drone frequency tables
-│   ├── version.h                  # Firmware version
-│   ├── splash_logo.h              # Custom boot logo bitmap (NEW)
-│   ├── rf_scanner.h
-│   ├── gps_manager.h
-│   ├── gnss_integrity.h
-│   ├── detection_engine.h
-│   ├── alert_handler.h
-│   ├── display.h
-│   ├── data_logger.h
-│   ├── wifi_dashboard.h
-│   ├── wifi_scanner.h             # WiFi promiscuous Remote ID (NEW)
-│   ├── remote_id_parser.h         # OpenDroneID parsing (NEW)
-│   └── compass.h                  # QMC5883L/QMC6310 magnetometer (NEW)
-├── src/
-│   ├── main.cpp                   # Task creation, mode switching
-│   ├── rf_scanner.cpp             # Dual-band sweep (sub-GHz + 2.4 GHz on LR1121)
-│   ├── gps_manager.cpp            # u-blox M10 UART + UBX
-│   ├── gnss_integrity.cpp         # Jamming/spoofing algorithms
-│   ├── drone_signatures.cpp       # ELRS/Crossfire/DJI/Tracer frequency tables
-│   ├── detection_engine.cpp       # Threat FSM with dual-band correlation
-│   ├── alert_handler.cpp          # LED patterns, serial alerts
-│   ├── display.cpp                # 8-screen OLED UI with dashboard summary
-│   ├── data_logger.cpp            # SD/SPIFFS CSV logging
-│   ├── wifi_dashboard.cpp         # HTTP API server (dashboard mode)
-│   ├── wifi_scanner.cpp           # Promiscuous mode Remote ID (NEW)
-│   ├── remote_id_parser.cpp       # OpenDroneID frame parsing (NEW)
-│   └── compass.cpp                # Magnetometer + bearing estimation (NEW)
-├── lib/
-│   └── opendroneid/               # opendroneid-core-c library (NEW)
-├── data/                          # SPIFFS web dashboard HTML
-├── docs/
-│   ├── wiring.md
-│   ├── detection_logic.md
-│   └── field_testing.md
-├── LICENSE
-└── README.md
-```
+## Phase 3: GNSS Hardening (v1.8.0)
+
+### 3.1 — Position Jump Spoofing Detection
+**Research:** CISA Epsilon methodology (highest-value piece).
+**Implementation:** Compare consecutive NAV-PVT positions. Flag jumps >100m when hAcc <10m and speed doesn't support the distance. Zero hardware cost.
+**Effort:** ~20 lines.
+
+### 3.2 — C/N0 Uniformity Spoofing Enhancement
+Dedicated spoofing alert when C/N0σ drops below 2.0 dB-Hz for 5+ consecutive readings.
+**Effort:** ~15 lines on existing data.
+
+### 3.3 — RF-GNSS Temporal Correlation
+RF detection + GNSS jamming indicator spike within 30s = "ELECTRONIC WARFARE" threat with accelerated escalation.
+**Effort:** ~30 lines.
+
+### 3.4 — Buzzer + LED Alert System
+Passive piezo (KY-006) GPIO 16. Distinct tone patterns per threat level. LED GPIO 37. Mute via long-press BOOT button.
+**Depends on:** Soldering.
+**Effort:** ~80 lines.
 
 ---
 
-## Dependencies Summary
+## Phase 4: Operational Modes (v1.9.0)
 
-| Library | Source | Purpose |
-|---------|--------|---------|
-| RadioLib v7+ | PlatformIO lib | SX1262 + LR1121 radio control |
-| SparkFun u-blox GNSS v3 | PlatformIO lib | GPS UBX protocol |
-| Adafruit SSD1306 + GFX | PlatformIO lib | OLED display |
-| opendroneid-core-c | GitHub | Remote ID frame parsing |
-| QMC5883LCompass | PlatformIO lib | Magnetometer heading |
-| WebServer (built-in) | ESP32 Arduino | WiFi dashboard |
+### 4.1 — STANDARD / COVERT / HIGH ALERT
+- STANDARD: Full CAD + RSSI + WiFi (current)
+- COVERT: RF only, WiFi OFF, OLED dim/off, buzzer off, LED off
+- HIGH ALERT: CAD every cycle (skip RSSI interval), immediate buzzer on confirmation
+Button: single=screen cycle, double=HIGH ALERT, triple=COVERT, long=mute.
+**Effort:** ~100 lines.
+
+### 4.2 — SD Card JSONL Logging
+Threat events, GPS positions, RSSI snapshots, detection metadata. Auto-rotate daily. GPS timestamps.
+**Effort:** ~80 lines.
+
+### 4.3 — WiFi Dashboard
+Web page via ESP32 AP. Real-time threat, spectrum waterfall, GPS, detection history. WebSocket for live updates.
+**Effort:** ~200 lines.
 
 ---
 
-## Risk Register
+## Phase 5: Advanced Detection (v2.0.0)
 
-| Risk | Impact | Mitigation |
-|------|--------|------------|
-| LR1121 RadioLib `getRSSI(false)` on 2.4 GHz may behave differently than SX1262 | High | Test immediately on Stage 2. Semtech's own spectral scan example confirms GetRssiInst works on 2.4 GHz. |
-| Band switching latency may slow dual-band sweep cycle | Medium | Measure actual switch time. LR1121 datasheet shows ~100µs PLL settling for in-band, ~1-5ms for cross-band. Budget 10ms for safety. |
-| WiFi promiscuous + LR1121 SPI contention | Low | Different hardware buses. WiFi is internal, LR1121 is external SPI. No electrical conflict. |
-| Compass calibration drift near electronics | Medium | Hard/soft iron calibration routine. Keep magnetometer on QWIIC cable, physically separated from the board. |
-| GPS_MIN_CNO at 6 degrades fix in production | High | **MUST raise to 15-20 before field deployment.** Currently tracked in Claude memory. |
-| opendroneid-core-c library size may exceed flash on Heltec V3 | Medium | Heltec V3 has 8MB flash — should be fine. Test during Sprint 8 Stage 4. |
+### 5.1 — ZMQ/DragonSync JSON Output
+**Research:** alphafox02/DragonSync message format.
+Structured JSON on serial matching DragonSync schema. Host-side Python bridge publishes to ZMQ port 4227 for ATAK/TAK, Home Assistant, WarDragon ecosystem.
+**Effort:** ~100 lines firmware (ArduinoJson) + ~50 lines Python bridge.
+
+### 5.2 — BLE Remote ID Scanning
+**Research:** opendroneid-core-c + andylee77/RID_Scanner.
+ESP32-S3 BLE scan for ASTM F3411 UUID 0xFFFA. Catches BLE-only RID drones. Must prototype BLE+WiFi coexistence first.
+**Risk:** Radio time-sharing between BLE and WiFi promiscuous mode.
+**Effort:** ~150-200 lines + coexistence testing.
+
+### 5.3 — Dual-Band Correlation Engine
+Sub-GHz + 2.4 GHz simultaneous detection = "MULTI-BAND DRONE." Temporal correlation: signals appearing/disappearing within 2s across bands = same source.
+**Effort:** ~60 lines.
+
+---
+
+## Phase 6: Performance & Polish (v2.1.0)
+
+### 6.1 — Scan Cycle Time Reduction
+Target: <2s (currently ~2.7s). Profile first, then optimize CAD channel count, RSSI batch mode, GFSK settings.
+
+### 6.2 — Power Management
+Light sleep between scan cycles. Target: 8+ hours on dual 18650.
+
+### 6.3 — OTA Firmware Updates
+ESP32 OTA via WiFi AP. Version check. Rollback on failure.
+
+### 6.4 — Multi-Device Mesh (ESP-NOW)
+Share detections between 2+ SENTRY-RF nodes. Cross-validation. Direction estimation. Enables future jammer triangulation (satellite-defense-toolkit algorithm).
+
+### 6.5 — Compass Integration
+QMC5883L on GPIO 10/21 (Wire1). Signal bearing on Threat screen.
+
+---
+
+## Phase 7: Field Validation (Continuous — Start After Phase 1)
+
+### 7.1 — SX1262 Re-validation
+Re-run v1.5.3 field test with current firmware. Verify no range regression.
+
+### 7.2 — LR1121 First Outdoor Test
+Compare LR1121 vs SX1262 detection range. Test both sub-GHz and 2.4 GHz.
+
+### 7.3 — False Positive Soak (8+ hours outdoor)
+Urban environment, no drone. Target: <1% time at WARNING+.
+
+### 7.4 — GPS_MIN_CNO Calibration
+Test in open sky, tree cover, urban canyon. Document per-environment recommendations.
+
+---
+
+## Future Research (v3.0+ — Not Scheduled)
+
+| Technique | Why Deferred | Revisit When |
+|---|---|---|
+| ML RF Classification (PSD+SVM) | Needs IQ capture hardware, months of training data | AntSDR E200 integration |
+| Acoustic Detection (Batear) | Niche use case, high FP in noisy environments | Standalone prototype experiment |
+| Jammer Triangulation | Requires mesh networking (Phase 6.4) | After ESP-NOW mesh works |
+| Full CISA Epsilon Port | Diminishing returns on $25 device | GPS security becomes primary mission |
+| Clock Drift Analysis | ESP32 millis() drift too noisy for reliable detection | External TCXO time reference |
+
+---
+
+## Research References by Phase
+
+| Phase | Technique | Source | Decision |
+|---|---|---|---|
+| 1.1 | Adaptive noise floor + dual time constants | wardragon-fpv-detect, cognitive radio lit | IMPLEMENT |
+| 2.2 | Bandwidth discrimination | wardragon-fpv-detect MIN_BW_HZ | IMPLEMENT |
+| 2.3 | Full ASTM F3411 decoding | opendroneid/opendroneid-core-c | IMPLEMENT |
+| 3.1 | Position jump detection | CISA Epsilon (partial) | IMPLEMENT |
+| 3.2 | C/N0 uniformity | cisagov/Epsilon, satellite-defense-toolkit | IMPLEMENT |
+| 5.1 | ZMQ/JSON output | alphafox02/DragonSync | IMPLEMENT |
+| 5.2 | BLE Remote ID | opendroneid-core-c, RID_Scanner | IMPLEMENT |
+
+---
+
+## Hardware Notes
+
+| Board | Port | Radio | GPS | Antenna | Status |
+|---|---|---|---|---|---|
+| LilyGo T3S3 SX1262 | COM8 | SX1262 | FlyFishRC M10QMC | Sub-GHz SMA | v1.6.1 validated |
+| LilyGo T3S3 LR1121 | COM14 | LR1121 | HGLRC M100 Mini | Sub-GHz SMA + 2.4 GHz u.fl | v1.6.1 validated |
+| JJ (Juh-Mak-In Jammer) | COM6 | SX1262 | — | Sub-GHz SMA | v2.0.0 validated |
+| Heltec WiFi LoRa 32 V4 | — | SX1262 | — | — | Not yet tested |
+| XR1 (RadioMaster) | — | LR1121 | — | — | Scaffold committed, awaiting wiring |
+
+### Critical Parameters
+- GPS_MIN_CNO = 15 (field), LR1121 TCXO = 3.0V, DIVERSITY_WINDOW_MS = 8000
+- LR1121 CAD uses buildCadConfigLR() (NOT buildCadConfig)
+- LR1121 2.4 GHz BW800 requires setBandwidth(812.5, true)
+- Git author: ND / ndywoo10@gmail.com
+
+---
+
+## Timeline
+
+| Phase | Description | Depends On | Est. Duration |
+|---|---|---|---|
+| 1 | Detection Reliability + Adaptive NF | Start here | 3-5 days |
+| 2 | 2.4 GHz + RID Decoding + BW Discrimination | RadioMaster TX + Phase 1 | 5-7 days |
+| 3 | GNSS Hardening + Buzzer | Phase 1 | 3-5 days |
+| 4 | Operational Modes + SD + Dashboard | Phase 3 | 5-7 days |
+| 5 | Advanced Detection (ZMQ, BLE, Dual-Band) | Phase 2 + Phase 4 | 5-7 days |
+| 6 | Performance & Polish | Phase 5 | 5-7 days |
+| 7 | Field Validation | Continuous from Phase 1 | Ongoing |
+
+**Total to v2.0.0:** ~21-31 dev sessions. Field testing starts after Phase 1.
+
+---
+
+*Last updated: April 11, 2026*
