@@ -241,6 +241,7 @@ static DiversitySlot diversitySlots[MAX_DIVERSITY_SLOTS];
 // FHSS drones sustain high diversity every cycle; infrastructure spikes briefly.
 static int sustainedDiversityCycles = 0;
 static int prevSustainedDiversityCycles = 0;  // for velocity: detect threshold crossings
+static unsigned long sustainedStartMs = 0;    // wall-clock start of current sustained run
 
 // Diversity velocity: track sustained-diversity threshold crossings per window
 static int velocityHistory[DIVERSITY_VELOCITY_WINDOW];
@@ -302,14 +303,17 @@ static void diversityCycleUpdate() {
     // Sustained-diversity gate: was last cycle's raw diversity above threshold?
     int rawDiv = countDiversity(DIVERSITY_WINDOW_MS);
     prevSustainedDiversityCycles = sustainedDiversityCycles;
+    bool wasTimeSustained = (sustainedStartMs != 0) &&
+                            ((millis() - sustainedStartMs) >= PERSISTENCE_MIN_MS);
     if (rawDiv >= PERSISTENCE_MIN_DIVERSITY) {
         sustainedDiversityCycles++;
+        if (sustainedStartMs == 0) sustainedStartMs = millis();
     } else {
         // Drone departure prune: if we had sustained diversity (drone present)
         // and it just collapsed, aggressively clear all non-ambient taps.
-        // This prevents confirmed taps from lingering and inflating the score
+        // Prevents confirmed taps from lingering and inflating the score
         // for 30+ seconds after the drone leaves.
-        if (sustainedDiversityCycles >= PERSISTENCE_MIN_CONSECUTIVE) {
+        if (wasTimeSustained) {
             for (int i = 0; i < MAX_TAPS; i++) {
                 if (tapList[i].active && !tapList[i].isAmbient) {
                     tapList[i].active = false;
@@ -317,12 +321,14 @@ static void diversityCycleUpdate() {
             }
         }
         sustainedDiversityCycles = 0;
+        sustainedStartMs = 0;
     }
 
-    // Velocity: did we just cross the sustained threshold this cycle?
+    // Velocity: did we just cross the sustained threshold this cycle (time-based)?
+    bool isTimeSustained = (sustainedStartMs != 0) &&
+                           ((millis() - sustainedStartMs) >= PERSISTENCE_MIN_MS);
     int crossed = 0;
-    if (sustainedDiversityCycles == PERSISTENCE_MIN_CONSECUTIVE &&
-        prevSustainedDiversityCycles < PERSISTENCE_MIN_CONSECUTIVE) {
+    if (isTimeSustained && !wasTimeSustained) {
         crossed = rawDiv;  // all current diversity just became persistent
     }
     velocityHistory[velocityIdx] = crossed;
@@ -354,11 +360,11 @@ static int countDiversity(unsigned long windowMs) {
 }
 
 // Sustained-diversity persistent count: if raw diversity has been >= threshold
-// for PERSISTENCE_MIN_CONSECUTIVE cycles, ALL current diversity qualifies.
-// Otherwise returns 0. This catches FHSS (many freqs every cycle) while
-// filtering sporadic infrastructure (brief diversity spikes that don't sustain).
+// for PERSISTENCE_MIN_MS wall-clock time, ALL current diversity qualifies.
+// Otherwise returns 0. Catches FHSS (many freqs every cycle) while filtering
+// sporadic infrastructure. Time-based gate gives board-parity timing.
 static int countPersistentDiversity(unsigned long windowMs) {
-    if (sustainedDiversityCycles >= PERSISTENCE_MIN_CONSECUTIVE)
+    if (sustainedStartMs != 0 && (millis() - sustainedStartMs) >= PERSISTENCE_MIN_MS)
         return countDiversity(windowMs);
     return 0;
 }
@@ -443,21 +449,32 @@ static uint8_t fhssCollectUnique(FhssHit* out, uint8_t outMax) {
 // many infrastructure channels exist.
 static uint8_t fhssFlushSpread() {
     static uint8_t baselineFhssUnique = 0;
-    static bool baselineSet = false;
+    static uint8_t baselineCalibCycles = 0;
+    static const uint8_t BASELINE_CALIB_N = 5;
 
     FhssHit uniq[FHSS_WINDOW_CYCLES * FHSS_MAX_HITS_PER_CYCLE];
     uint8_t uniqCount = fhssCollectUnique(uniq, sizeof(uniq) / sizeof(uniq[0]));
 
-    if (!baselineSet && warmupComplete) {
-        baselineFhssUnique = uniqCount;
-        baselineSet = true;
+    if (!warmupComplete) return 0;
+
+    // Baseline calibration: first BASELINE_CALIB_N post-warmup cycles track
+    // the MAX unique count to avoid locking in a low snapshot that the
+    // actual steady-state infrastructure exceeds. After calibration,
+    // switch to symmetric slow adaptation.
+    if (baselineCalibCycles < BASELINE_CALIB_N) {
+        if (uniqCount > baselineFhssUnique) baselineFhssUnique = uniqCount;
+        baselineCalibCycles++;
         return 0;
     }
-    if (!baselineSet) return 0;
 
-    // Update baseline: fast drop when environment quiets, stable when steady
-    if (uniqCount <= baselineFhssUnique) {
-        baselineFhssUnique = uniqCount;
+    // Symmetric slow adaptation (1/cycle). Baseline drifts with the
+    // environment in both directions, but a sudden spike ≥threshold is
+    // treated as a drone — baseline holds.
+    if (uniqCount < baselineFhssUnique) {
+        baselineFhssUnique--;
+    } else if (uniqCount > baselineFhssUnique &&
+               uniqCount < baselineFhssUnique + FHSS_UNIQUE_THRESHOLD) {
+        baselineFhssUnique++;
     }
 
     // Only fire when unique count exceeds baseline by threshold
@@ -491,6 +508,7 @@ void resetDiversityTracker() {
     velocityIdx = 0;
     sustainedDiversityCycles = 0;
     prevSustainedDiversityCycles = 0;
+    sustainedStartMs = 0;
     memset(fhssWindow, 0, sizeof(fhssWindow));
     fhssWindowIdx = 0;
 }
@@ -503,6 +521,7 @@ void cadScannerInit() {
     velocityIdx = 0;
     sustainedDiversityCycles = 0;
     prevSustainedDiversityCycles = 0;
+    sustainedStartMs = 0;
     memset(fhssWindow, 0, sizeof(fhssWindow));
     fhssWindowIdx = 0;
     ambientTapCount = 0;
@@ -540,6 +559,7 @@ static CadTap* addTap(float freq, uint8_t sf, RfBand band = BAND_SUB_GHZ) {
             tapList[i].consecutiveHits = 1;
             tapList[i].missCount = 0;
             tapList[i].firstSeenMs = millis();
+            tapList[i].firstConfirmedMs = 0;
             tapList[i].lastSeenMs = millis();
             tapList[i].active = true;
             return &tapList[i];
@@ -558,6 +578,7 @@ static CadTap* addFskTap(float freq) {
             tapList[i].consecutiveHits = 1;
             tapList[i].missCount = 0;
             tapList[i].firstSeenMs = millis();
+            tapList[i].firstConfirmedMs = 0;
             tapList[i].lastSeenMs = millis();
             tapList[i].active = true;
             return &tapList[i];
@@ -568,6 +589,9 @@ static CadTap* addFskTap(float freq) {
 
 static void tapHit(CadTap* tap) {
     if (tap->consecutiveHits < 255) tap->consecutiveHits++;
+    if (tap->firstConfirmedMs == 0 && tap->consecutiveHits >= TAP_CONFIRM_HITS) {
+        tap->firstConfirmedMs = millis();
+    }
     tap->missCount = 0;
     tap->lastSeenMs = millis();
 }
@@ -581,15 +605,21 @@ static void tapMiss(CadTap* tap) {
 
 static void countConfirmed(int& cadCount, int& fskCount, int& strongPending, int& pending, int& totalActive) {
     cadCount = 0; fskCount = 0; strongPending = 0; pending = 0; totalActive = 0;
+    unsigned long now = millis();
     for (int i = 0; i < MAX_TAPS; i++) {
         if (!tapList[i].active) continue;
         // Skip ambient taps from all counts that feed threat escalation
         if (tapList[i].isAmbient) continue;
         totalActive++;
-        if (tapList[i].consecutiveHits >= TAP_CONFIRM_HITS) {
+        // Time-based persistence: a tap only counts as confirmed when it has
+        // held the confirmation state for PERSISTENCE_MIN_MS wall-clock time.
+        // Gives board-parity timing regardless of scan cycle speed.
+        bool timeConfirmed = (tapList[i].firstConfirmedMs != 0) &&
+                             ((now - tapList[i].firstConfirmedMs) >= PERSISTENCE_MIN_MS);
+        if (tapList[i].consecutiveHits >= TAP_CONFIRM_HITS && timeConfirmed) {
             if (tapList[i].isFsk) fskCount++;
             else cadCount++;
-        } else if (tapList[i].consecutiveHits == 2 && !tapList[i].isFsk) {
+        } else if (tapList[i].consecutiveHits >= 2 && !tapList[i].isFsk) {
             strongPending++;
         } else {
             pending++;
@@ -665,10 +695,12 @@ static void ensureGFSK_LR(LR1121_RSSI& radio) {
 }
 
 // 2.4 GHz channel helpers
-static const int ELRS_24_CHANNELS = 40;  // 2400-2480 MHz at 2 MHz steps
-static float elrs24Freq(int ch) { return 2400.0f + (ch * 2.0f); }
+static const int ELRS_24_CHANNELS = 80;  // 2400-2479 MHz at 1 MHz steps (ELRS 2.4 hop grid)
+static float elrs24Freq(int ch) { return 2400.0f + (ch * 1.0f); }
 
-// 2.4 GHz CAD channel allocation
+// 2.4 GHz CAD channel allocation — same scan budget as before (20/10/5),
+// but now rotated across 80 channels instead of 40, giving broader coverage
+// over more cycles at the cost of slower per-channel revisit.
 static const int CAD_24_SF6  = 20;
 static const int CAD_24_SF7  = 10;
 static const int CAD_24_SF8  = 5;
@@ -846,12 +878,6 @@ CadFskResult cadFskScan(LR1121_RSSI& radio, uint32_t cycleNum, const ScanResult*
         }
     }
 
-    // Flush FHSS frequency-spread tracker: if unique-hit count across the
-    // rolling window crossed the threshold, each non-ambient unique hit
-    // is pushed into recordDiversityHit() — bypassing the consecutiveHits>=2
-    // gate that kept hopping transmitters from accumulating diversity.
-    fhssFlushSpread();
-
     // ── PHASE 2b: 2.4 GHz CAD scan — SF6-SF8, BW800 ──────────────────
     // LR1121 handles band switching transparently via setFrequency().
     // The `true` (high-band) arg is REQUIRED — without it, the driver
@@ -913,10 +939,17 @@ CadFskResult cadFskScan(LR1121_RSSI& radio, uint32_t cycleNum, const ScanResult*
                 if (!existing) addTap(freq, sc.sf, BAND_2G4);
                 if (existing && existing->consecutiveHits >= 2)
                     recordDiversityHit(freq, sc.sf);
+                // Feed 2.4 GHz CAD hits into the FHSS spread tracker so it can
+                // detect 2.4 GHz FHSS drones (ELRS 2.4, Ghost, Tracer).
+                fhssRecordHit(freq, sc.sf);
             }
         }
     }
     }
+
+    // Flush FHSS frequency-spread tracker (after both Phase 2a and Phase 2b
+    // so 2.4 GHz hits feed the same cycle they're recorded).
+    fhssFlushSpread();
 
     // ── PHASE 4: Switch back to GFSK for RSSI sweep ──────────────────
     ensureGFSK_LR(radio);

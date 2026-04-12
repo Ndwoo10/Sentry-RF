@@ -18,6 +18,7 @@ struct CadTap {
     uint8_t  consecutiveHits;
     uint8_t  missCount;
     unsigned long firstSeenMs;
+    unsigned long firstConfirmedMs; // time consecutiveHits first reached TAP_CONFIRM_HITS (0 if never)
     unsigned long lastSeenMs;
     bool     active;
     bool     isFsk;           // true for FSK taps, false for LoRa CAD taps

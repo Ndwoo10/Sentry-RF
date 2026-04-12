@@ -85,7 +85,8 @@ static const int MAX_DIVERSITY_SLOTS           = 32;      // max tracked distinc
 // NOTE: Threat level mapping is now via SCORE_* thresholds, not DIVERSITY_*.
 
 // ── AAD: Persistence Gate + Diversity Velocity ───────────────────────
-static const uint8_t PERSISTENCE_MIN_CONSECUTIVE = 5;     // consecutive high-diversity cycles before qualifying (was 3, raised after 28-min soak showed ambient sustaining 4)
+static const uint8_t PERSISTENCE_MIN_CONSECUTIVE = 5;     // consecutive high-diversity cycles (legacy cycle-based gate)
+static const unsigned long PERSISTENCE_MIN_MS    = 8000;  // min wall-clock time for a tap to be persistently confirmed (board-parity gate)
 static const uint8_t PERSISTENCE_MIN_DIVERSITY   = 2;     // min raw diversity to count as "sustained" (v1.6.1: lowered from 3 because ambient filter consumes most of the frequency space)
 static const uint8_t DIVERSITY_VELOCITY_WINDOW   = 3;     // scan cycles for velocity calculation
 static const uint8_t DIVERSITY_VELOCITY_FHSS_MIN = 2;     // min velocity for full FHSS confidence
