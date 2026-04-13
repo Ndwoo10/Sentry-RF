@@ -25,6 +25,17 @@ struct CadTap {
     bool     isAmbient;       // true if matches ambient source from warmup
 };
 
+// Phase B (Detection Engine v2.0): anchor evidence — which specific tap was
+// the strongest non-ambient hit this cycle. The candidate engine in Phase C
+// uses this to tie sub-GHz CAD hits to RSSI peaks, RID detections, etc.
+struct CadEvidenceAnchor {
+    bool    valid;
+    float   frequency;        // MHz of best tap
+    uint8_t sf;               // Spreading factor of best tap
+    bool    isFsk;
+    uint8_t consecutiveHits;  // Hits on this tap in last cycle
+};
+
 struct CadBandSummary {
     int confirmedCadCount;
     int confirmedFskCount;
@@ -35,6 +46,11 @@ struct CadBandSummary {
     int persistentDiversityCount;
     int diversityVelocity;
     int sustainedCycles;
+    // Phase B additions
+    CadEvidenceAnchor anchor;
+    uint32_t          capturedMs;    // millis() when summary was produced
+    bool              warmupReady;   // ambient filter has run >= MIN_AMBIENT_CYCLES
+    bool              hwFault;       // cadHwFaultFlag debounced true
 };
 
 struct CadFskResult {
