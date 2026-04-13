@@ -121,7 +121,7 @@ static void loRaScanTask(void* param) {
         // Highest-confidence detection. Runs EVERY cycle.
         // Pass last RSSI data for RSSI-guided CAD scanning.
         CadFskResult cadFsk = cadFskScan(radio, sweepNum,
-                                          localResult.sweepTimeMs > 0 ? &localResult : nullptr);
+                                          localResult.valid ? &localResult : nullptr);
         detectionEngineIngestCad(cadFsk.confirmedCadCount, cadFsk.confirmedFskCount,
                                  cadFsk.strongPendingCad, cadFsk.totalActiveTaps,
                                  cadFsk.diversityCount,
@@ -185,13 +185,18 @@ static void loRaScanTask(void* param) {
             }
         }
 
-        // Log to SD/SPIFFS
-        SystemState logSnapshot;
+        // Log to SD/SPIFFS — zero-init prevents garbage if mutex path is skipped.
+        // Only write when the snapshot is real (mutex acquired).
+        SystemState logSnapshot = {};
+        bool snapshotValid = false;
         if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(10))) {
             logSnapshot = systemState;
             xSemaphoreGive(stateMutex);
+            snapshotValid = true;
         }
-        loggerWrite(logSnapshot, sweepNum++);
+        if (snapshotValid) {
+            loggerWrite(logSnapshot, sweepNum++);
+        }
 
         unsigned long cycleEnd = millis();
 
