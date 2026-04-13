@@ -220,6 +220,32 @@ static bool isAmbientCadSource(float freq, uint8_t sf) {
     return false;
 }
 
+// Phase B.5: progressive ambient tagging. After recordAmbientTap() adds a new
+// frequency to the ambient list, this helper scans all live taps across both
+// band trackers and marks any matching tap as ambient *immediately*. This
+// replaces the old batch re-tag that only ran after warmup completed and left
+// infrastructure taps looking like drones throughout the warmup window.
+static void retagLiveTapsForNewAmbient(float freq, uint8_t sf) {
+    BandTracker* trackers[] = {
+        &subGHzTracker
+#ifdef BOARD_T3S3_LR1121
+        , &band24Tracker
+#endif
+    };
+    for (BandTracker* tp : trackers) {
+        BandTracker& tk = *tp;
+        for (int i = 0; i < MAX_TAPS; i++) {
+            CadTap& tap = tk.taps[i];
+            if (!tap.active) continue;
+            if (tap.isAmbient) continue;                   // already tagged
+            if (tap.sf != sf) continue;                    // SF mismatch
+            if (fabsf(tap.frequency - freq) > AMBIENT_FREQ_TOLERANCE) continue;
+            tap.isAmbient = true;
+            Serial.printf("[WARMUP] progressive ambient tag: %.1fMHz\n", tap.frequency);
+        }
+    }
+}
+
 static void recordAmbientTap(float freq, uint8_t sf, bool duringWarmup = false) {
     if (isAmbientCadSource(freq, sf)) return;
     if (ambientTapCount < MAX_AMBIENT_TAPS) {
@@ -229,6 +255,9 @@ static void recordAmbientTap(float freq, uint8_t sf, bool duringWarmup = false) 
         ambientTaps[ambientTapCount].active = true;
         ambientTaps[ambientTapCount].learnedDuringWarmup = duringWarmup;
         ambientTapCount++;
+        // Phase B.5: immediately tag any live taps matching this new freq/SF
+        // so infrastructure never looks like drone evidence during warmup.
+        retagLiveTapsForNewAmbient(freq, sf);
     }
 }
 
@@ -621,7 +650,9 @@ static CadTap* addTap(BandTracker& t, float freq, uint8_t sf, RfBand band = BAND
             t.taps[i].sf = sf;
             t.taps[i].band = band;
             t.taps[i].isFsk = false;
-            t.taps[i].isAmbient = false;
+            // Phase B.5: new taps at already-known ambient frequencies get
+            // tagged immediately instead of waiting for a retag cycle.
+            t.taps[i].isAmbient = isAmbientCadSource(freq, sf);
             t.taps[i].consecutiveHits = 1;
             t.taps[i].missCount = 0;
             t.taps[i].firstSeenMs = millis();
@@ -1197,18 +1228,9 @@ CadFskResult cadFskScan(LR1121_RSSI& radio, uint32_t cycleNum, const ScanResult*
         }
     }
 
-    // Tag taps with ambient status
-    if (warmupComplete) {
-        BandTracker* trackers[] = { &subGHzTracker, &band24Tracker };
-        for (BandTracker* tp : trackers) {
-            BandTracker& tk = *tp;
-            for (int i = 0; i < MAX_TAPS; i++) {
-                if (tk.taps[i].active) {
-                    tk.taps[i].isAmbient = isAmbientCadSource(tk.taps[i].frequency, tk.taps[i].sf);
-                }
-            }
-        }
-    }
+    // Phase B.5: batch post-warmup ambient re-tag removed. Progressive tagging
+    // in recordAmbientTap() now marks matching live taps the moment a new
+    // ambient frequency is learned, so this batch loop is redundant.
 
     if (cadErrorsThisCycle > 0) {
         Serial.printf("[CAD] %u/%u probes returned errors (first=%d)\n", cadErrorsThisCycle, cadProbesThisCycle, cadFirstError);
@@ -1567,14 +1589,9 @@ CadFskResult cadFskScan(SX1262& radio, uint32_t cycleNum, const ScanResult* rssi
         }
     }
 
-    // Tag each active tap with its ambient status
-    if (warmupComplete) {
-        for (int i = 0; i < MAX_TAPS; i++) {
-            if (subGHzTracker.taps[i].active) {
-                subGHzTracker.taps[i].isAmbient = isAmbientCadSource(subGHzTracker.taps[i].frequency, subGHzTracker.taps[i].sf);
-            }
-        }
-    }
+    // Phase B.5: batch post-warmup ambient re-tag removed. Progressive tagging
+    // in recordAmbientTap() now marks matching live taps the moment a new
+    // ambient frequency is learned, so this batch loop is redundant.
 
     if (cadErrorsThisCycle > 0) {
         Serial.printf("[CAD] %u/%u probes returned errors (first=%d)\n", cadErrorsThisCycle, cadProbesThisCycle, cadFirstError);
