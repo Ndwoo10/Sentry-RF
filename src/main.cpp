@@ -131,6 +131,10 @@ static void loRaScanTask(void* param) {
         // Phase C: also feed the full sub-GHz CadBandSummary (anchor + counts)
         // into the shadow candidate engine. Runs parallel to the legacy path.
         detectionEngineIngestCadBandSummary(cadFsk.subGHz);
+#ifdef BOARD_T3S3_LR1121
+        // Phase C.2: 2.4 GHz CadBandSummary as confirmer (LR1121 only).
+        detectionEngineIngestCad24BandSummary(cadFsk.band24);
+#endif
 
         unsigned long cadDone = millis();
 
