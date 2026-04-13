@@ -262,15 +262,30 @@ static void loRaScanTask(void* param) {
                               cadDone - cycleStart, threatLevelStr(threat));
             }
 
-            Serial.printf("[CAD] cycle=%u conf=%d taps=%d div=%d persDiv=%d vel=%d sustainedCycles=%d score=%d fast=%d confirm=%d\n",
-                          sweepNum, cadFsk.confirmedCadCount,
-                          cadFsk.totalActiveTaps, cadFsk.diversityCount,
-                          cadFsk.persistentDiversityCount,
-                          cadFsk.diversityVelocity,
-                          cadFsk.sustainedCycles,
-                          detectionEngineGetScore(),
-                          detectionEngineGetFastScore(),
-                          detectionEngineGetConfirmScore());
+            if (cadFsk.subGHz.anchor.valid) {
+                Serial.printf("[CAD] cycle=%u conf=%d taps=%d div=%d persDiv=%d vel=%d sustainedCycles=%d score=%d fast=%d confirm=%d anchor=%.1fMHz SF%u hits=%u\n",
+                              sweepNum, cadFsk.confirmedCadCount,
+                              cadFsk.totalActiveTaps, cadFsk.diversityCount,
+                              cadFsk.persistentDiversityCount,
+                              cadFsk.diversityVelocity,
+                              cadFsk.sustainedCycles,
+                              detectionEngineGetScore(),
+                              detectionEngineGetFastScore(),
+                              detectionEngineGetConfirmScore(),
+                              cadFsk.subGHz.anchor.frequency,
+                              cadFsk.subGHz.anchor.sf,
+                              cadFsk.subGHz.anchor.consecutiveHits);
+            } else {
+                Serial.printf("[CAD] cycle=%u conf=%d taps=%d div=%d persDiv=%d vel=%d sustainedCycles=%d score=%d fast=%d confirm=%d anchor=none\n",
+                              sweepNum, cadFsk.confirmedCadCount,
+                              cadFsk.totalActiveTaps, cadFsk.diversityCount,
+                              cadFsk.persistentDiversityCount,
+                              cadFsk.diversityVelocity,
+                              cadFsk.sustainedCycles,
+                              detectionEngineGetScore(),
+                              detectionEngineGetFastScore(),
+                              detectionEngineGetConfirmScore());
+            }
 
             xSemaphoreGive(serialMutex);
         }

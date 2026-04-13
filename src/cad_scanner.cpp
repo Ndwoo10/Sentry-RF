@@ -693,6 +693,51 @@ static void countConfirmed(BandTracker& t, int& cadCount, int& fskCount, int& st
     }
 }
 
+// ── Phase B: Anchor selection ───────────────────────────────────────────────
+// Picks the strongest non-ambient tap from a band tracker as the "anchor" —
+// the candidate engine in Phase C uses this to tie sub-GHz CAD evidence to
+// RSSI peaks, RID detections, and other independent confirmation sources.
+
+static bool tapEligibleAsAnchor(const CadTap& tap) {
+    if (!tap.active) return false;
+    if (tap.isAmbient) return false;
+    if (tap.consecutiveHits == 0) return false;
+    return true;
+}
+
+// Returns true if tap A is a strictly better anchor candidate than tap B.
+// Priority: confirmed (consecutiveHits >= 2) > pending; then higher hit count;
+// then lower index (caller uses index ordering for tie-break stability).
+static bool betterAnchor(const CadTap& a, const CadTap& b) {
+    bool aConfirmed = (a.consecutiveHits >= 2);
+    bool bConfirmed = (b.consecutiveHits >= 2);
+    if (aConfirmed != bConfirmed) return aConfirmed;       // confirmed wins
+    if (a.consecutiveHits != b.consecutiveHits)
+        return a.consecutiveHits > b.consecutiveHits;      // more hits wins
+    return false;                                          // tied — keep current
+}
+
+static CadEvidenceAnchor chooseAnchor(const BandTracker& t) {
+    CadEvidenceAnchor result = {};
+    int bestIdx = -1;
+    for (int i = 0; i < MAX_TAPS; i++) {
+        const CadTap& tap = t.taps[i];
+        if (!tapEligibleAsAnchor(tap)) continue;
+        if (bestIdx < 0 || betterAnchor(tap, t.taps[bestIdx])) {
+            bestIdx = i;
+        }
+    }
+    if (bestIdx >= 0) {
+        const CadTap& best = t.taps[bestIdx];
+        result.valid = true;
+        result.frequency = best.frequency;
+        result.sf = best.sf;
+        result.isFsk = best.isFsk;
+        result.consecutiveHits = best.consecutiveHits;
+    }
+    return result;
+}
+
 // Populate a CadBandSummary from a tracker at the end of a scan cycle.
 static void fillBandSummary(BandTracker& t, CadBandSummary& s) {
     countConfirmed(t, s.confirmedCadCount, s.confirmedFskCount,
@@ -701,6 +746,11 @@ static void fillBandSummary(BandTracker& t, CadBandSummary& s) {
     s.persistentDiversityCount = countPersistentDiversity(t, DIVERSITY_WINDOW_MS);
     s.diversityVelocity = computeDiversityVelocity(t);
     s.sustainedCycles = getSustainedDiversityCycles(t);
+    // Phase B additions
+    s.anchor = chooseAnchor(t);
+    s.capturedMs = (uint32_t)millis();
+    s.warmupReady = warmupComplete;
+    s.hwFault = cadHwFaultFlag;
 }
 
 // ── LoRa ↔ FSK mode switching ────────────────────────────────────────────────
