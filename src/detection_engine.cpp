@@ -459,7 +459,29 @@ static void emitFskEvent(float freq, uint8_t severity) {
 
 static int lastScore = 0;  // exposed for serial output
 
+// Threat level name helper for FSM transition logging.
+static const char* threatName(ThreatLevel t) {
+    switch (t) {
+        case THREAT_CLEAR:    return "CLEAR";
+        case THREAT_ADVISORY: return "ADVISORY";
+        case THREAT_WARNING:  return "WARNING";
+        case THREAT_CRITICAL: return "CRITICAL";
+        default:              return "?";
+    }
+}
+
+// Single point of FSM transition emission. No-op if prev == next.
+// Centralized here so downstream effects (log, buzzer, LED, display)
+// trigger exactly once per true state change — never on steady-state
+// reassessment cycles.
+static void emitThreatTransition(ThreatLevel prev, ThreatLevel next, uint32_t nowMs) {
+    if (prev == next) return;
+    Serial.printf("[FSM] %s -> %s at %lums\n",
+                  threatName(prev), threatName(next), (unsigned long)nowMs);
+}
+
 static ThreatLevel assessThreat(const IntegrityStatus& integrity) {
+    ThreatLevel prevThreat = currentThreat;
     // ── Two-layer scoring (v1.8.0) ───────────────────────────────────
     // FAST score: CAD-only evidence. Updates every cycle. Drives ADVISORY
     // immediately from cycle 1 — no warmup gate needed.
@@ -614,8 +636,10 @@ static ThreatLevel assessThreat(const IntegrityStatus& integrity) {
         clearSinceMs = 0;
     }
 
-    // Emit events on change
-    if (desired != currentThreat) {
+    // Emit detection-event queue pushes on transition (feed alert pipeline).
+    // The FSM transition itself is emitted via emitThreatTransition() after
+    // currentThreat is committed — true prev -> next comparison.
+    if (desired != prevThreat) {
         // CAD/FSK events (emit when threat at WARNING+)
         if (desired >= THREAT_WARNING) {
             if (cadDetectionsThisCycle > 0)
@@ -638,6 +662,7 @@ static ThreatLevel assessThreat(const IntegrityStatus& integrity) {
     }
 
     currentThreat = desired;
+    emitThreatTransition(prevThreat, currentThreat, (uint32_t)now);
     return currentThreat;
 }
 
