@@ -26,6 +26,11 @@ void detectionEngineIngestCad(int cadCount, int fskCount, int strongPendingCad,
 // legacy detectionEngineIngestCad() path. Safe no-op if summary is empty.
 void detectionEngineIngestCadBandSummary(const struct CadBandSummary& subGHz);
 
+// Phase C.2: Ingest full 2.4 GHz CadBandSummary (LR1121 only). The shadow
+// candidate engine uses this strictly as a confirmer — it never seeds a new
+// candidate from 2.4 GHz evidence alone.
+void detectionEngineIngestCad24BandSummary(const struct CadBandSummary& band24);
+
 // Ingest fresh sweep data — called only on RSSI sweep cycles.
 // Runs ambientFilterUpdate, updateBandEnergy, peak extraction, protocol tracking,
 // and 2.4 GHz tracking. Rejects duplicate sweeps via seq number check.

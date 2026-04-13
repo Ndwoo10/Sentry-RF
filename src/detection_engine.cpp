@@ -127,6 +127,12 @@ static DetectionCandidate candidatePool[MAX_CANDIDATES] = {};
 static CadBandSummary lastSubGHzSummary = {};
 static bool lastSubGHzSummaryValid = false;
 
+// Phase C.2: cached 2.4 GHz CadBandSummary — populated by
+// detectionEngineIngestCad24BandSummary() on LR1121 builds. The candidate
+// engine uses this strictly as a confirmer for existing sub-GHz candidates.
+static CadBandSummary lastBand24Summary = {};
+static bool lastBand24SummaryValid = false;
+
 static void resetCandidate(DetectionCandidate& c) {
     memset(&c, 0, sizeof(c));
     c.state = CAND_EMPTY;
@@ -304,6 +310,12 @@ static ThreatDecision chooseBestCandidate(DetectionCandidate* pool, uint8_t coun
 void detectionEngineIngestCadBandSummary(const CadBandSummary& subGHz) {
     lastSubGHzSummary = subGHz;
     lastSubGHzSummaryValid = true;
+}
+
+// Phase C.2: 2.4 GHz CadBandSummary ingest — LR1121 only.
+void detectionEngineIngestCad24BandSummary(const CadBandSummary& band24) {
+    lastBand24Summary = band24;
+    lastBand24SummaryValid = true;
 }
 
 // ── Noise floor calculation ─────────────────────────────────────────────────
@@ -991,22 +1003,30 @@ static void evaluateShadowCandidateEngine(ThreatLevel legacyLevel,
                                           const IntegrityStatus& integrity,
                                           uint32_t nowMs) {
     // ── 1. Seed / refresh a sub-GHz candidate from the cached band summary ──
-    if (lastSubGHzSummaryValid) {
+    // Phase C.2: REQUIRES s.anchor.valid for ALL evidence binding. FHSS-only
+    // data may refresh an existing candidate but never seed one. Without a
+    // valid anchor we have no way to bind evidence to a target hypothesis, so
+    // we drop the entire section. This eliminates the synthetic 915.0 MHz
+    // fallback that produced false ADVISORY on FHSS bench noise.
+    if (lastSubGHzSummaryValid && lastSubGHzSummary.anchor.valid) {
         const CadBandSummary& s = lastSubGHzSummary;
+        const float anchorFreq  = s.anchor.frequency;
 
         bool haveCad  = (s.confirmedCadCount > 0) || (s.strongPendingCad > 0);
         bool haveFsk  = (s.confirmedFskCount > 0);
         bool haveFhss = (s.persistentDiversityCount > 0) ||
                         (s.diversityVelocity >= DIVERSITY_VELOCITY_FHSS_MIN);
 
-        if (haveCad || haveFsk || haveFhss) {
-            // Anchor: prefer the Phase B CadEvidenceAnchor, fall back to mid-band.
-            float anchorFreq = s.anchor.valid ? s.anchor.frequency : 915.0f;
+        DetectionCandidate* c = findCandidateForBandFreq(
+            candidatePool, MAX_CANDIDATES, anchorFreq, 0x01 /* sub-GHz */, nowMs);
 
-            DetectionCandidate* c = findCandidateForBandFreq(
-                candidatePool, MAX_CANDIDATES, anchorFreq, 0x01 /* sub-GHz */, nowMs);
-
-            if (!c) {
+        // Phase C.2 Fix 1: NEW candidate creation requires CAD or FSK evidence
+        // (not FHSS alone). Phase C.2 Fix 2: pre-warmup gate requires at least
+        // 2 confirmed CAD taps so a single infrastructure pickup cannot seed
+        // before the ambient filter learns it.
+        if (!c && (haveCad || haveFsk)) {
+            bool seedAllowed = s.warmupReady ? true : (s.confirmedCadCount >= 2);
+            if (seedAllowed) {
                 c = allocCandidate(candidatePool, MAX_CANDIDATES);
                 if (c) {
                     resetCandidate(*c);
@@ -1018,65 +1038,111 @@ static void evaluateShadowCandidateEngine(ThreatLevel legacyLevel,
                     c->maxFreqSeen = anchorFreq;
                     c->firstSeenMs = nowMs;
                 }
-            } else {
-                // Expand envelope; gently pull anchor toward latest hit.
-                if (anchorFreq < c->minFreqSeen) c->minFreqSeen = anchorFreq;
-                if (anchorFreq > c->maxFreqSeen) c->maxFreqSeen = anchorFreq;
-                c->anchorFreq = (c->anchorFreq * 0.7f) + (anchorFreq * 0.3f);
+            }
+        } else if (c) {
+            // Existing candidate found — expand envelope; gently pull anchor.
+            if (anchorFreq < c->minFreqSeen) c->minFreqSeen = anchorFreq;
+            if (anchorFreq > c->maxFreqSeen) c->maxFreqSeen = anchorFreq;
+            c->anchorFreq = (c->anchorFreq * 0.7f) + (anchorFreq * 0.3f);
+        }
+
+        if (c) {
+            c->lastSeenMs = nowMs;
+
+            // CAD confirmed/pending scale per-tap matching legacy fast score.
+            if (haveCad) {
+                uint16_t cadPts = (uint16_t)s.confirmedCadCount * FAST_SCORE_CAD_PER_TAP;
+                if (cadPts > FAST_SCORE_CAD_CAP) cadPts = FAST_SCORE_CAD_CAP;
+                refreshEvidence(c->cadConfirmed, (uint8_t)cadPts,
+                                TTL_CAD_CONFIRMED_MS, nowMs);
+
+                uint16_t pendPts = (uint16_t)s.strongPendingCad * (FAST_SCORE_CAD_PER_TAP / 2);
+                if (pendPts > FAST_SCORE_CAD_CAP) pendPts = FAST_SCORE_CAD_CAP;
+                refreshEvidence(c->cadPending, (uint8_t)pendPts,
+                                TTL_CAD_PENDING_MS, nowMs);
+
+                if (s.confirmedCadCount > 0 && c->state == CAND_SEEDING) {
+                    c->state = CAND_TRACKING;
+                }
             }
 
-            if (c) {
-                c->lastSeenMs = nowMs;
+            if (haveFsk) {
+                uint16_t fskPts = (uint16_t)s.confirmedFskCount * FAST_SCORE_FSK_PER_TAP;
+                if (fskPts > FAST_SCORE_FSK_CAP) fskPts = FAST_SCORE_FSK_CAP;
+                refreshEvidence(c->fskConfirmed, (uint8_t)fskPts,
+                                TTL_FSK_CONFIRMED_MS, nowMs);
+                if (c->state == CAND_SEEDING) c->state = CAND_TRACKING;
+            }
 
-                // CAD confirmed/pending scale per-tap matching legacy fast score.
-                if (haveCad) {
-                    uint16_t cadPts = (uint16_t)s.confirmedCadCount * FAST_SCORE_CAD_PER_TAP;
-                    if (cadPts > FAST_SCORE_CAD_CAP) cadPts = FAST_SCORE_CAD_CAP;
-                    refreshEvidence(c->cadConfirmed, (uint8_t)cadPts,
-                                    TTL_CAD_CONFIRMED_MS, nowMs);
+            // FHSS may refresh — never seeds (Fix 1).
+            if (haveFhss) {
+                refreshEvidence(c->fhssSub, 1, TTL_FHSS_SUB_MS, nowMs);
+            }
 
-                    // Pending taps contribute half of a confirmed tap's weight.
-                    uint16_t pendPts = (uint16_t)s.strongPendingCad * (FAST_SCORE_CAD_PER_TAP / 2);
-                    if (pendPts > FAST_SCORE_CAD_CAP) pendPts = FAST_SCORE_CAD_CAP;
-                    refreshEvidence(c->cadPending, (uint8_t)pendPts,
-                                    TTL_CAD_PENDING_MS, nowMs);
-
-                    if (s.confirmedCadCount > 0 && c->state == CAND_SEEDING) {
-                        c->state = CAND_TRACKING;
-                    }
+            if (freshRssiThisCycle) {
+                int peakSub  = countPersistentDroneUS() + countPersistentDrone();
+                int protoSub = countPersistentProtocolUS() + countPersistentProtocol(false);
+                if (peakSub > 0) {
+                    refreshEvidence(c->sweepSub, WEIGHT_CONFIRM_PEAK,
+                                    TTL_SWEEP_SUB_MS, nowMs);
                 }
-
-                if (haveFsk) {
-                    uint16_t fskPts = (uint16_t)s.confirmedFskCount * FAST_SCORE_FSK_PER_TAP;
-                    if (fskPts > FAST_SCORE_FSK_CAP) fskPts = FAST_SCORE_FSK_CAP;
-                    refreshEvidence(c->fskConfirmed, (uint8_t)fskPts,
-                                    TTL_FSK_CONFIRMED_MS, nowMs);
-                    if (c->state == CAND_SEEDING) c->state = CAND_TRACKING;
-                }
-
-                if (haveFhss) {
-                    refreshEvidence(c->fhssSub, 1, TTL_FHSS_SUB_MS, nowMs);
-                }
-
-                // Fresh-sweep confirm evidence: only attach on cycles where
-                // detectionEngineIngestSweep() updated tracked[]/protoTracked[].
-                if (freshRssiThisCycle) {
-                    int peakSub  = countPersistentDroneUS() + countPersistentDrone();
-                    int protoSub = countPersistentProtocolUS() + countPersistentProtocol(false);
-                    if (peakSub > 0) {
-                        refreshEvidence(c->sweepSub, WEIGHT_CONFIRM_PEAK,
-                                        TTL_SWEEP_SUB_MS, nowMs);
-                    }
-                    if (protoSub > 0) {
-                        refreshEvidence(c->protoSub, WEIGHT_CONFIRM_PROTO,
-                                        TTL_PROTO_SUB_MS, nowMs);
-                    }
+                if (protoSub > 0) {
+                    refreshEvidence(c->protoSub, WEIGHT_CONFIRM_PROTO,
+                                    TTL_PROTO_SUB_MS, nowMs);
                 }
             }
         }
     }
 
-    // ── 2. Attach cross-domain evidence (RID, GNSS) to ALL active candidates ──
+    // ── 1b. Phase C.2 Fix 4: 2.4 GHz CAD as confirmer (LR1121 only) ─────────
+    // The 2.4 GHz band can attach as a CONFIRMER to an existing sub-GHz
+    // candidate but never creates one. Spec Part 6: attach only if there is
+    // exactly one live sub-GHz candidate, OR a single dominant one (fast >= 15
+    // higher than next-best). Sets bandMask bit 1 on the chosen candidate.
+    if (lastBand24SummaryValid) {
+        const CadBandSummary& b24 = lastBand24Summary;
+        bool have24Cad = (b24.confirmedCadCount > 0);
+
+        if (have24Cad) {
+            int liveSubGHzCount = 0;
+            DetectionCandidate* bestSubGHz = nullptr;
+            uint8_t bestFast = 0;
+            uint8_t secondFast = 0;
+            for (uint8_t i = 0; i < MAX_CANDIDATES; i++) {
+                DetectionCandidate& ccc = candidatePool[i];
+                if (!ccc.active || !(ccc.bandMask & 0x01)) continue;
+                if ((nowMs - ccc.lastSeenMs) > CAND_ASSOC_24_TTL_MS) continue;
+                liveSubGHzCount++;
+                uint8_t f = computeFastScore(ccc, nowMs);
+                if (f > bestFast) {
+                    secondFast = bestFast;
+                    bestFast = f;
+                    bestSubGHz = &ccc;
+                } else if (f > secondFast) {
+                    secondFast = f;
+                }
+            }
+
+            bool canAttach24 = false;
+            if (liveSubGHzCount == 1) {
+                canAttach24 = true;
+            } else if (liveSubGHzCount >= 2 && (uint16_t)bestFast >= (uint16_t)secondFast + 15) {
+                canAttach24 = true;  // dominant candidate
+            }
+
+            if (canAttach24 && bestSubGHz) {
+                refreshEvidence(bestSubGHz->cad24, 10, TTL_CAD24_MS, nowMs);
+                bestSubGHz->bandMask |= 0x02;
+                Serial.printf("[CAND] 2.4GHz confirmed — attached to anchor=%.1fMHz\n",
+                              bestSubGHz->anchorFreq);
+            }
+        }
+    }
+
+    // ── 2. Cross-domain evidence (RID, GNSS) — Phase C.2 Fix 3 ──────────────
+    // Spec Part 6: attach ONLY if exactly one live RF candidate exists. With
+    // 0 or 2+ active candidates the cross-domain evidence cannot be uniquely
+    // bound and must not promote anything.
     bool ridDetected = false;
     unsigned long ridLastMs = 0;
     if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(5))) {
@@ -1088,14 +1154,28 @@ static void evaluateShadowCandidateEngine(ThreatLevel legacyLevel,
     bool gnssAnomaly = integrity.jammingDetected || integrity.spoofingDetected ||
                        integrity.cnoAnomalyDetected;
 
+    int activeCount = 0;
+    DetectionCandidate* loneCandidate = nullptr;
     for (uint8_t i = 0; i < MAX_CANDIDATES; i++) {
-        DetectionCandidate& cc = candidatePool[i];
-        if (!cc.active) continue;
+        if (candidatePool[i].active) {
+            activeCount++;
+            loneCandidate = &candidatePool[i];
+        }
+    }
+
+    if (activeCount == 1 && loneCandidate != nullptr) {
         if (ridFresh) {
-            refreshEvidence(cc.rid, WEIGHT_CONFIRM_REMOTE_ID, TTL_RID_MS, nowMs);
+            refreshEvidence(loneCandidate->rid, WEIGHT_CONFIRM_REMOTE_ID, TTL_RID_MS, nowMs);
         }
         if (gnssAnomaly) {
-            refreshEvidence(cc.gnss, WEIGHT_CONFIRM_GNSS_TEMPORAL, TTL_GNSS_MS, nowMs);
+            refreshEvidence(loneCandidate->gnss, WEIGHT_CONFIRM_GNSS_TEMPORAL, TTL_GNSS_MS, nowMs);
+        }
+    } else {
+        if (ridFresh) {
+            Serial.printf("[CAND] RID skipped — %d active candidates\n", activeCount);
+        }
+        if (gnssAnomaly) {
+            Serial.printf("[CAND] GNSS skipped — %d active candidates\n", activeCount);
         }
     }
 
