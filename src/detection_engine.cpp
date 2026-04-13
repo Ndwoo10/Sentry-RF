@@ -229,6 +229,12 @@ static DetectionCandidate* allocCandidate(DetectionCandidate* pool, uint8_t coun
     return nullptr;
 }
 
+// Phase D: pick the highest-fast-score active sub-GHz candidate to attach
+// broad-spectrum sweep evidence to. The sweep is band-wide, so the strongest
+// sub-GHz candidate is the natural target. Returns nullptr if none.
+static DetectionCandidate* findCandidateForSweep(DetectionCandidate* pool, uint8_t count,
+                                                 uint32_t nowMs);
+
 static uint8_t computeFastScore(const DetectionCandidate& c, uint32_t nowMs) {
     uint16_t cadRaw = (uint16_t)evidenceScore(c.cadConfirmed, nowMs) +
                       (uint16_t)evidenceScore(c.cadPending, nowMs);
@@ -251,6 +257,23 @@ static uint8_t computeConfirmScore(const DetectionCandidate& c, uint32_t nowMs) 
                      (uint16_t)evidenceScore(c.rid, nowMs) +
                      (uint16_t)evidenceScore(c.gnss, nowMs);
     return (total > 255) ? (uint8_t)255 : (uint8_t)total;
+}
+
+static DetectionCandidate* findCandidateForSweep(DetectionCandidate* pool, uint8_t count,
+                                                 uint32_t nowMs) {
+    DetectionCandidate* best = nullptr;
+    uint8_t bestFast = 0;
+    for (uint8_t i = 0; i < count; i++) {
+        DetectionCandidate& c = pool[i];
+        if (!c.active || !(c.bandMask & 0x01)) continue;
+        if ((nowMs - c.lastSeenMs) > CAND_ASSOC_SUB_TTL_MS) continue;
+        uint8_t f = computeFastScore(c, nowMs);
+        if (best == nullptr || f > bestFast) {
+            best = &c;
+            bestFast = f;
+        }
+    }
+    return best;
 }
 
 static ThreatDecision chooseBestCandidate(DetectionCandidate* pool, uint8_t count,
@@ -755,7 +778,8 @@ static ThreatLevel assessThreat(const IntegrityStatus& integrity) {
         desired = THREAT_ADVISORY;
     }
 
-    if (desired >= THREAT_ADVISORY) lastDetectionMs = millis();
+    // Phase D: lastDetectionMs is now set by detectionEngineAssess from the
+    // candidate decision (not legacy desired).
 
     // Post-warmup housekeeping: clear persistence counters once the filters
     // finish learning. The two-score system is safe from cycle 1, so no
@@ -864,9 +888,13 @@ static ThreatLevel assessThreat(const IntegrityStatus& integrity) {
         }
     }
 
-    currentThreat = desired;
-    emitThreatTransition(prevThreat, currentThreat, (uint32_t)now);
-    return currentThreat;
+    // Phase D: do NOT commit currentThreat or call emitThreatTransition here.
+    // detectionEngineAssess now drives the FSM from the candidate engine's
+    // ThreatDecision. assessThreat() returns its desired level for [CAND-DELTA]
+    // regression-alarm comparison only. Detection-event queue pushes above
+    // still fire on legacy transitions for now (Phase E will migrate them).
+    (void)prevThreat;
+    return desired;
 }
 
 // ── Public API ──────────────────────────────────────────────────────────────
@@ -991,23 +1019,49 @@ void detectionEngineIngestSweep(const ScanResult& scan, const ScanResult24* scan
         }
         cleanupProtoTracking();
     }
+
+    // ── Phase D.2: attach sweep evidence to best active sub-GHz candidate ──
+    // The sweep is broad-spectrum, so it attaches to whichever sub-GHz
+    // candidate is currently strongest (highest fast score). First-attach
+    // gets WEIGHT_CONFIRM_PEAK; persistent (already-live) gets 2x.
+    {
+        const uint32_t nowMs = (uint32_t)millis();
+        DetectionCandidate* sweepCand =
+            findCandidateForSweep(candidatePool, MAX_CANDIDATES, nowMs);
+        if (sweepCand) {
+            bool peakCorroborates =
+                (countPersistentDroneUS() + countPersistentDrone()) > 0;
+            bool protoMatch =
+                (countPersistentProtocolUS() + countPersistentProtocol(false)) > 0;
+            if (peakCorroborates) {
+                uint8_t newScore = evidenceLive(sweepCand->sweepSub, nowMs)
+                                       ? (uint8_t)(WEIGHT_CONFIRM_PEAK * 2)
+                                       : (uint8_t)WEIGHT_CONFIRM_PEAK;
+                refreshEvidence(sweepCand->sweepSub, newScore,
+                                TTL_SWEEP_SUB_MS, nowMs);
+            }
+            if (protoMatch) {
+                refreshEvidence(sweepCand->protoSub,
+                                (uint8_t)WEIGHT_CONFIRM_PROTO,
+                                TTL_PROTO_SUB_MS, nowMs);
+            }
+        }
+    }
 }
 
-// ── Phase C: Shadow-mode evaluation ─────────────────────────────────────────
-// Runs AFTER assessThreat() on every assess cycle. Reads the cached sub-GHz
-// CadBandSummary, refreshes evidence on the matching candidate, attaches
-// cross-domain (RID/GNSS) and sweep (peak/proto) evidence, and logs the
-// candidate-engine decision for comparison with the legacy scorer. Does NOT
-// influence the returned ThreatLevel this phase — comparison-only.
-static void evaluateShadowCandidateEngine(ThreatLevel legacyLevel,
-                                          const IntegrityStatus& integrity,
-                                          uint32_t nowMs) {
+// ── Phase D: Candidate engine evaluation (cutover) ──────────────────────────
+// Runs from detectionEngineAssess() on every cycle. Reads the cached sub-GHz
+// (and 2.4 GHz on LR1121) CadBandSummary, refreshes evidence on the matching
+// candidate, attaches cross-domain (RID/GNSS) evidence, and returns a
+// ThreatDecision. As of Phase D, the returned decision is the REAL threat
+// output — no longer shadow mode.
+static ThreatDecision evaluateCandidateEngine(const IntegrityStatus& integrity,
+                                              uint32_t nowMs) {
     // ── 1. Seed / refresh a sub-GHz candidate from the cached band summary ──
-    // Phase C.2: REQUIRES s.anchor.valid for ALL evidence binding. FHSS-only
-    // data may refresh an existing candidate but never seed one. Without a
-    // valid anchor we have no way to bind evidence to a target hypothesis, so
-    // we drop the entire section. This eliminates the synthetic 915.0 MHz
-    // fallback that produced false ADVISORY on FHSS bench noise.
+    // Phase D.1: TWO seed paths are allowed post-warmup — confirmed CAD/FSK
+    // (strongSeed) OR marginal multi-tap FHSS (marginalSeed). The latter
+    // closes the SX1262 marginal-acquisition gap found in Phase C.2 testing
+    // where pending taps + persistent diversity weren't enough to seed.
     if (lastSubGHzSummaryValid && lastSubGHzSummary.anchor.valid) {
         const CadBandSummary& s = lastSubGHzSummary;
         const float anchorFreq  = s.anchor.frequency;
@@ -1017,27 +1071,39 @@ static void evaluateShadowCandidateEngine(ThreatLevel legacyLevel,
         bool haveFhss = (s.persistentDiversityCount > 0) ||
                         (s.diversityVelocity >= DIVERSITY_VELOCITY_FHSS_MIN);
 
+        // Phase D.1 (corrected): seed gate. Pre-warmup is strict (2+ confirmed
+        // CAD). Post-warmup accepts confirmed CAD/FSK OR a single pending tap.
+        // The pending-tap path already existed in Phase C.2 — the prior
+        // attempt at a separate marginalSeed condition was redundant. The
+        // real fix for marginal SX1262 acquisitions is the extended
+        // TTL_CAD_PENDING_MS in sentry_config.h, which keeps a pending-tap
+        // candidate alive long enough for FHSS diversity to attach.
+        bool seedAllowed = false;
+        if (!s.warmupReady) {
+            seedAllowed = (s.confirmedCadCount >= 2);
+        } else {
+            seedAllowed = (s.confirmedCadCount > 0) ||
+                          (s.confirmedFskCount > 0) ||
+                          (s.strongPendingCad > 0);
+        }
+
         DetectionCandidate* c = findCandidateForBandFreq(
             candidatePool, MAX_CANDIDATES, anchorFreq, 0x01 /* sub-GHz */, nowMs);
 
-        // Phase C.2 Fix 1: NEW candidate creation requires CAD or FSK evidence
-        // (not FHSS alone). Phase C.2 Fix 2: pre-warmup gate requires at least
-        // 2 confirmed CAD taps so a single infrastructure pickup cannot seed
-        // before the ambient filter learns it.
-        if (!c && (haveCad || haveFsk)) {
-            bool seedAllowed = s.warmupReady ? true : (s.confirmedCadCount >= 2);
-            if (seedAllowed) {
-                c = allocCandidate(candidatePool, MAX_CANDIDATES);
-                if (c) {
-                    resetCandidate(*c);
-                    c->active      = true;
-                    c->state       = CAND_SEEDING;
-                    c->bandMask    = 0x01;
-                    c->anchorFreq  = anchorFreq;
-                    c->minFreqSeen = anchorFreq;
-                    c->maxFreqSeen = anchorFreq;
-                    c->firstSeenMs = nowMs;
-                }
+        if (!c && seedAllowed) {
+            c = allocCandidate(candidatePool, MAX_CANDIDATES);
+            if (c) {
+                resetCandidate(*c);
+                c->active      = true;
+                // Confirmed CAD/FSK → TRACKING; pending-only → SEEDING
+                // (still requires confirmed evidence to promote later)
+                c->state       = ((s.confirmedCadCount > 0) || (s.confirmedFskCount > 0))
+                                     ? CAND_TRACKING : CAND_SEEDING;
+                c->bandMask    = 0x01;
+                c->anchorFreq  = anchorFreq;
+                c->minFreqSeen = anchorFreq;
+                c->maxFreqSeen = anchorFreq;
+                c->firstSeenMs = nowMs;
             }
         } else if (c) {
             // Existing candidate found — expand envelope; gently pull anchor.
@@ -1179,7 +1245,7 @@ static void evaluateShadowCandidateEngine(ThreatLevel legacyLevel,
         }
     }
 
-    // ── 3. Run scoring policy, log for comparison ─────────────────────────────
+    // ── 3. Run scoring policy, log per-cycle decision ────────────────────────
     ThreatDecision decision = chooseBestCandidate(candidatePool, MAX_CANDIDATES, nowMs);
 
     Serial.printf("[CAND] fast=%u conf=%u level=%s anchor=%.1fMHz band=0x%02X has=%d\n",
@@ -1188,25 +1254,46 @@ static void evaluateShadowCandidateEngine(ThreatLevel legacyLevel,
                   decision.anchorFreq, decision.bandMask,
                   decision.hasCandidate ? 1 : 0);
 
-    if (decision.level != legacyLevel) {
-        Serial.printf("[CAND-DELTA] legacy=%s candidate=%s\n",
-                      threatName(legacyLevel), threatName(decision.level));
-    }
+    return decision;
 }
 
 ThreatLevel detectionEngineAssess(const GpsData& gps, const IntegrityStatus& integrity) {
     (void)gps;  // reserved for future geo-gated scoring
-    ThreatLevel result = assessThreat(integrity);
 
-    // Phase C: shadow-mode candidate engine runs in parallel. Its decision is
-    // logged via [CAND]/[CAND-DELTA] only — it does NOT drive the returned
-    // ThreatLevel this phase.
-    evaluateShadowCandidateEngine(result, integrity, (uint32_t)millis());
+    // Phase D: legacy assessThreat still runs for [CAND-DELTA] regression
+    // alarm comparison and to drive the detection-event queue (CAD/FSK/proto
+    // events still fire on legacy transitions). Its currentThreat write and
+    // emitThreatTransition call were removed — those are now driven below
+    // from the candidate decision.
+    ThreatLevel legacyLevel = assessThreat(integrity);
+
+    // Phase D: candidate engine is now the PRIMARY threat decider.
+    const uint32_t nowMs = (uint32_t)millis();
+    ThreatDecision decision = evaluateCandidateEngine(integrity, nowMs);
+
+    // Commit candidate decision to the FSM
+    ThreatLevel prevThreat = currentThreat;
+    currentThreat = decision.level;
+    lastFastScore    = (int)decision.fastScore;
+    lastConfirmScore = (int)decision.confirmScore;
+    lastScore        = (int)decision.fastScore + (int)decision.confirmScore;
+    if (decision.level >= THREAT_ADVISORY) lastDetectionMs = nowMs;
+
+    // Fire transition emitter — drives buzzer / LED / OLED / [FSM] log
+    emitThreatTransition(prevThreat, currentThreat, nowMs);
+
+    // Regression alarm: log when legacy and candidate disagree. In Phase C
+    // this was a comparison log; in Phase D it's a regression alarm — the
+    // candidate decision IS the threat output.
+    if (decision.level != legacyLevel) {
+        Serial.printf("[CAND-DELTA] legacy=%s candidate=%s\n",
+                      threatName(legacyLevel), threatName(decision.level));
+    }
 
     // Reset freshRssiThisCycle so the NEXT non-sweep cycle's confirm score
     // doesn't re-use RSSI-derived evidence from the previous sweep.
     freshRssiThisCycle = false;
-    return result;
+    return currentThreat;
 }
 
 // ── Deprecated backward-compat wrappers ───────────────────────────────────

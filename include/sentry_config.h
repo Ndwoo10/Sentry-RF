@@ -174,7 +174,13 @@ static const unsigned long REMINDER_INTERVAL = 30000;  // 30 seconds
 
 // --- Evidence TTLs (milliseconds) ---
 #define TTL_CAD_CONFIRMED_MS        2500
-#define TTL_CAD_PENDING_MS          2500
+// Phase D.1 correction: extended from 2500ms to bridge the timing gap
+// between a pending-tap candidate aging out and FHSS diversity arriving.
+// On marginal SX1262 acquisitions the FHSS burst can lag the last pending
+// tap by 3-5 scan cycles (~5-10s). 6000ms keeps the candidate alive long
+// enough for fhssSub evidence to attach and add the diversity bonus.
+// Still well below CAND_AGE_OUT_MS=12000 so dead candidates evict on time.
+#define TTL_CAD_PENDING_MS          6000
 #define TTL_FSK_CONFIRMED_MS        2500
 #define TTL_FHSS_SUB_MS             3000
 #define TTL_SWEEP_SUB_MS            4500
