@@ -60,7 +60,10 @@ static const unsigned long COOLDOWN_MS   = 5000;    // ms before threat decays o
 #define RSSI_SWEEP_INTERVAL_MS   8000
 
 // ── Rapid-Clear Path ──────────────────────────────────────────────────
-static const unsigned long RAPID_CLEAR_CLEAN_MS = 5000;  // ms of continuous clean state to force CLEAR
+// Rapid-clear: force CLEAR after this many ms of candidate-CLEAR silence.
+// Ported to the candidate FSM in Phase G.1b — previously owned by the
+// legacy assessThreat() path. See detection_engine.cpp rapidClearSinceMs.
+static const unsigned long RAPID_CLEAR_CLEAN_MS = 5000;
 
 // ── CAD Tap Persistence ───────────────────────────────────────────────
 static const int   MAX_TAPS              = 32;      // max concurrent CAD taps
