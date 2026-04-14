@@ -269,9 +269,21 @@ static void loRaScanTask(void* param) {
                               cadDone - cycleStart, threatLevelStr(threat));
             }
 
+            // Phase E: per-band visibility — subConf (sub-GHz confirmed CAD,
+            // time-gated), sub24Conf (2.4 GHz confirmed CAD, LR1121 only),
+            // fastConf (sub-GHz fast-confirmed CAD, no time gate). subConf and
+            // sub24Conf together replace the aggregate `conf` field that mixed
+            // both bands and made LR1121 debugging blind.
+            int sub24ConfLog = 0;
+#ifdef BOARD_T3S3_LR1121
+            sub24ConfLog = cadFsk.band24.confirmedCadCount;
+#endif
             if (cadFsk.subGHz.anchor.valid) {
-                Serial.printf("[CAD] cycle=%u conf=%d taps=%d div=%d persDiv=%d vel=%d sustainedCycles=%d score=%d fast=%d confirm=%d anchor=%.1fMHz SF%u hits=%u\n",
-                              sweepNum, cadFsk.confirmedCadCount,
+                Serial.printf("[CAD] cycle=%u subConf=%d sub24Conf=%d fastConf=%d taps=%d div=%d persDiv=%d vel=%d sustainedCycles=%d score=%d fast=%d confirm=%d anchor=%.1fMHz SF%u hits=%u\n",
+                              sweepNum,
+                              cadFsk.subGHz.confirmedCadCount,
+                              sub24ConfLog,
+                              cadFsk.subGHz.fastConfirmedCadCount,
                               cadFsk.totalActiveTaps, cadFsk.diversityCount,
                               cadFsk.persistentDiversityCount,
                               cadFsk.diversityVelocity,
@@ -283,8 +295,11 @@ static void loRaScanTask(void* param) {
                               cadFsk.subGHz.anchor.sf,
                               cadFsk.subGHz.anchor.consecutiveHits);
             } else {
-                Serial.printf("[CAD] cycle=%u conf=%d taps=%d div=%d persDiv=%d vel=%d sustainedCycles=%d score=%d fast=%d confirm=%d anchor=none\n",
-                              sweepNum, cadFsk.confirmedCadCount,
+                Serial.printf("[CAD] cycle=%u subConf=%d sub24Conf=%d fastConf=%d taps=%d div=%d persDiv=%d vel=%d sustainedCycles=%d score=%d fast=%d confirm=%d anchor=none\n",
+                              sweepNum,
+                              cadFsk.subGHz.confirmedCadCount,
+                              sub24ConfLog,
+                              cadFsk.subGHz.fastConfirmedCadCount,
                               cadFsk.totalActiveTaps, cadFsk.diversityCount,
                               cadFsk.persistentDiversityCount,
                               cadFsk.diversityVelocity,

@@ -65,10 +65,11 @@ int detectionEngineGetConfirmScore();
 // Timestamp of the most recent detection event that scored ADVISORY or higher.
 uint32_t getLastDetectionMs();
 
-// ── Phase C: Shadow-mode candidate engine data structures ─────────────────
-// These run IN PARALLEL with the legacy scorer this phase. Actual threat
-// output is still driven by assessThreat(); the candidate engine's result
-// is logged via [CAND] and [CAND-DELTA] serial lines for comparison only.
+// ── Candidate engine data structures (introduced Phase C, cutover Phase D) ─
+// As of Phase D, the candidate engine is the sole driver of currentThreat
+// and emitThreatTransition(). Legacy assessThreat() still runs but is
+// comparison-only — its result is logged via [CAND-DELTA] for regression
+// alarming. Per-evidence readiness gates were added in Phase E (spec Part 7).
 
 enum CandidateState : uint8_t {
     CAND_EMPTY,
@@ -98,8 +99,15 @@ struct DetectionCandidate {
     EvidenceTerm         cadPending;
     EvidenceTerm         fskConfirmed;
     EvidenceTerm         fhssSub;
+    // Phase E: cluster evidence — fires when valid anchor + spread + at least
+    // one fast-confirmed CAD hit exist simultaneously. Closes the LR1121
+    // fast-FHSS detection gap where consecutiveHits>=3 isn't reached.
+    EvidenceTerm         fhssCluster;
     EvidenceTerm         sweepSub;
     EvidenceTerm         protoSub;
+    // Phase E: bandEnergy as candidate-confirm only. Gated by ambientFilterReady()
+    // so it never fires pre-warmup (the band-energy baseline isn't valid yet).
+    EvidenceTerm         bandEnergy;
     EvidenceTerm         cad24;
     EvidenceTerm         proto24;
     EvidenceTerm         rid;
@@ -107,7 +115,8 @@ struct DetectionCandidate {
 };
 
 struct ThreatDecision {
-    ThreatLevel level;
+    ThreatLevel level;            // Raw decision from chooseBestCandidate
+    ThreatLevel committedLevel;   // Phase E: post-hysteresis FSM level
     uint8_t     fastScore;
     uint8_t     confirmScore;
     float       anchorFreq;

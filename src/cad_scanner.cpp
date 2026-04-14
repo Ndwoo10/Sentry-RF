@@ -782,6 +782,18 @@ static void fillBandSummary(BandTracker& t, CadBandSummary& s) {
     s.capturedMs = (uint32_t)millis();
     s.warmupReady = warmupComplete;
     s.hwFault = cadHwFaultFlag;
+    // Phase E: fast-confirmed CAD count — non-ambient active taps that have
+    // reached consecutiveHits >= 2, with no time-persistence gate. Used by
+    // the candidate engine's fhssCluster evidence term to detect fast-FHSS
+    // signals on LR1121 where consecutiveHits >= 3 is rarely achieved.
+    s.fastConfirmedCadCount = 0;
+    for (int i = 0; i < MAX_TAPS; i++) {
+        const CadTap& tap = t.taps[i];
+        if (tap.active && !tap.isAmbient && !tap.isFsk &&
+            tap.consecutiveHits >= 2) {
+            s.fastConfirmedCadCount++;
+        }
+    }
 }
 
 // ── LoRa ↔ FSK mode switching ────────────────────────────────────────────────
@@ -820,6 +832,17 @@ static void ensureFSK(SX1262& radio) {
 #endif
 
 // ── Scan implementation ─────────────────────────────────────────────────────
+
+// SFScan: per-spreading-factor scan plan record. Phase E: promoted to file
+// scope for a potential future cad24Scan() split. The split itself was
+// attempted, caused radio mode tracking issues, and was deferred to Phase F.
+struct SFScan {
+    uint8_t  sf;
+    int      chCount;
+    int      totalCh;
+    uint32_t* rot;
+    float    (*fn)(int);
+};
 
 #ifdef BOARD_T3S3_LR1121
 
@@ -872,6 +895,8 @@ CadFskResult cadFskScan(LR1121_RSSI& radio, uint32_t cycleNum, const ScanResult*
     cadProbesThisCycle = 0;
     cadFirstError = 0;
 
+    // 2.4 GHz CAD is inline in cadFskScan() — architectural split deferred to
+    // Phase F. Phase E ships only the scoring/evidence improvements (E.2-E.4).
     diversityCycleUpdate(subGHzTracker);
     diversityCycleUpdate(band24Tracker);
     pruneExpiredDiversity(subGHzTracker);
@@ -994,10 +1019,8 @@ CadFskResult cadFskScan(LR1121_RSSI& radio, uint32_t cycleNum, const ScanResult*
     int sf11ch = pursuitMode && !sfHasActiveTapsSub(11) ? 1 : CAD_CH_SF11;
     int sf12ch = pursuitMode && !sfHasActiveTapsSub(12) ? 1 : CAD_CH_SF12;
 
-    struct SFScan {
-        uint8_t sf; int chCount; int totalCh; uint32_t* rot;
-        float (*fn)(int);
-    };
+    // Phase E: SFScan struct lives at file scope (promoted for potential
+    // future cad24Scan split — the split itself was deferred to Phase F).
 
     SFScan sfScans[] = {
         { 6,  sf6ch,  ELRS_915_CHANNELS, &rotSF6,  elrs915Freq },
@@ -1044,10 +1067,7 @@ CadFskResult cadFskScan(LR1121_RSSI& radio, uint32_t cycleNum, const ScanResult*
     // LR1121 handles band switching transparently via setFrequency().
     // The `true` (high-band) arg is REQUIRED — without it, the driver
     // validates bw against the 0-510 kHz sub-GHz range and silently
-    // rejects BW800, leaving the modem at the previous BW (BW500). This
-    // was a hidden bug until the 2026-04-11 audit: 2.4 GHz CAD was
-    // running at BW500 and missing every BW800 signal (ELRS 2.4 / Ghost /
-    // Tracer all use BW800). See LR11x0.cpp:516 for the range check.
+    // rejects BW800.
     radio.setBandwidth(812.5, true);
 
     // Re-check active 2.4 GHz taps first (band24Tracker contains only 2.4 GHz)
@@ -1068,9 +1088,6 @@ CadFskResult cadFskScan(LR1121_RSSI& radio, uint32_t cycleNum, const ScanResult*
     }
 
     // Broad 2.4 GHz scan — SF6/SF7/SF8 rotating, every 3rd cycle only.
-    // Drone signals persist for seconds, not milliseconds, so per-cycle
-    // coverage isn't needed. Skipping 2 of 3 cycles saves ~280ms per skip.
-    // Active 2.4 GHz taps (re-checked above) still run every cycle.
     if (cycleNum % 3 == 0) {
     SFScan sf24Scans[] = {
         { 6, CAD_24_SF6, ELRS_24_CHANNELS, &rot24SF6, elrs24Freq },
@@ -1100,7 +1117,6 @@ CadFskResult cadFskScan(LR1121_RSSI& radio, uint32_t cycleNum, const ScanResult*
                 if (!existing) addTap(band24Tracker, freq, sc.sf, BAND_2G4);
                 if (existing && existing->consecutiveHits >= 2)
                     recordDiversityHit(band24Tracker, freq, sc.sf);
-                // Feed 2.4 GHz CAD hits into the 2.4 GHz FHSS spread tracker.
                 fhssRecordHit24(freq, sc.sf);
             }
         }
@@ -1387,10 +1403,8 @@ CadFskResult cadFskScan(SX1262& radio, uint32_t cycleNum, const ScanResult* rssi
         Serial.println("[PURSUIT] Deactivated — normal scan");
     lastPursuitMode = pursuitMode;
 
-    struct SFScan {
-        uint8_t sf; int chCount; int totalCh; uint32_t* rot;
-        float (*fn)(int);
-    };
+    // Phase E: SFScan struct lives at file scope (promoted for potential
+    // future cad24Scan split — the split itself was deferred to Phase F).
 
     // In pursuit mode, SFs WITH active taps get more channels; inactive SFs
     // get reduced. This prevents losing a drone on SF9 when pursuit fires.

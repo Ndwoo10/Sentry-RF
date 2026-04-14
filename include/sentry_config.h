@@ -204,6 +204,22 @@ static const unsigned long REMINDER_INTERVAL = 30000;  // 30 seconds
 #define FAST_SCORE_FSK_PER_TAP      15
 #define FAST_SCORE_FSK_CAP          30
 #define FAST_SCORE_DIVERSITY_BONUS  20
-#define FAST_SCORE_FHSS_BONUS       15
+// FAST_SCORE_FHSS_BONUS removed — was orphaned (defined but never read).
+// FAST_SCORE_DIVERSITY_BONUS is the live FHSS-bonus weight inside computeFastScore().
+
+// ── Phase E: LR1121 fast-FHSS detection ─────────────────────────────────────
+// Spec: docs/SENTRY-RF_Detection_Engine_v2_SPEC.md Part 7
+// Phase E.1 (cad24Scan extraction + LR24_CAD_PERIOD_MS timer) was attempted
+// but reverted — the radio mode tracking issues introduced were not worth the
+// 2.4 GHz off-critical-path optimization. That split is deferred to Phase F.
+
+// FHSS cluster evidence TTL — short, refreshes every cycle the cluster signal
+// shape is present (anchor + spread + fast-confirmed taps).
+#define TTL_FHSS_CLUSTER_MS         3000
+
+// FHSS cluster evidence score (added to fast score). 15 closes the LR1121
+// 10-point gap from one confirmed sub-GHz tap (10) + diversity bonus (20) = 30
+// to ADVISORY+WARNING (40+) on fast-FHSS signals like ELRS 200Hz.
+#define FAST_SCORE_FHSS_CLUSTER     15
 
 #endif // SENTRY_CONFIG_H
