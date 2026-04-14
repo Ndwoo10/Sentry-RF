@@ -109,6 +109,13 @@ static uint32_t lastRfDetectionMs = 0;
 // COOLDOWN_MS from sentry_config.h
 static unsigned long clearSinceMs = 0;
 
+// Rapid-clear timer: tracks how long the candidate engine has reported
+// CLEAR continuously. When it exceeds RAPID_CLEAR_CLEAN_MS, forces
+// currentThreat to CLEAR without waiting for the COOLDOWN_MS one-step
+// decay. Ported from legacy assessThreat() in Phase G.1b — Phase G
+// dropped this by mistake when assessThreat() was deleted.
+static uint32_t rapidClearSinceMs = 0;
+
 static int lastFastScore = 0;
 static int lastConfirmScore = 0;
 // Phase G: cached last ThreatDecision fields for main.cpp/display.
@@ -874,6 +881,7 @@ void detectionEngineInit() {
     bandEnergyIdxEU = 0; bandEnergySamplesEU = 0; bandEnergyElevatedEU = false;
     bandEnergyElevated = false;
     clearSinceMs = 0;
+    rapidClearSinceMs = 0;
     currentThreat = THREAT_CLEAR;
     candidateThreatEventMs = 0;
     ambientFilterInit();
@@ -1344,6 +1352,26 @@ ThreatLevel detectionEngineAssess(const GpsData& gps, const IntegrityStatus& int
     ThreatLevel prevThreat = currentThreat;
     ThreatLevel desired    = decision.level;
 
+    // Phase G.1b: rapid-clear. If the candidate engine itself reports CLEAR
+    // (no active candidate above threshold) AND we are currently above CLEAR,
+    // start a rapid-clear timer. Once it exceeds RAPID_CLEAR_CLEAN_MS, jump
+    // straight to CLEAR without waiting for the one-step COOLDOWN_MS decay.
+    // This restores the "drone left the area" fast-path that the legacy
+    // assessThreat() owned pre-Phase-G. Must run BEFORE the hysteresis block
+    // so the decay branch doesn't delay the rapid-clear by COOLDOWN_MS.
+    if (desired == THREAT_CLEAR && currentThreat > THREAT_CLEAR) {
+        if (rapidClearSinceMs == 0) rapidClearSinceMs = nowMs;
+        if ((nowMs - rapidClearSinceMs) >= RAPID_CLEAR_CLEAN_MS) {
+            Serial.printf("[RAPID-CLEAR] %lums clean — forcing CLEAR\n",
+                          (unsigned long)(nowMs - rapidClearSinceMs));
+            currentThreat = THREAT_CLEAR;
+            rapidClearSinceMs = 0;
+            candidateThreatEventMs = nowMs;
+        }
+    } else {
+        rapidClearSinceMs = 0;
+    }
+
     if (desired > currentThreat) {
         currentThreat = desired;
         candidateThreatEventMs = nowMs;
@@ -1377,6 +1405,21 @@ ThreatLevel detectionEngineAssess(const GpsData& gps, const IntegrityStatus& int
     // the only emit path — the legacy per-source block is gone).
     if (prevThreat != currentThreat) {
         emitCandidateThreatEvent(currentThreat, decision.anchorFreq);
+    }
+
+    // Phase G.1b: sustained-clear diversity reset. If the committed threat
+    // has been CLEAR for >60 s continuously, wipe the diversity tracker to
+    // prevent slow drift on LoRa-rich benches (each stale diversity slot
+    // otherwise contributes to the FHSS evidence weight on the next real
+    // detection). Ported from legacy assessThreat() in Phase G.1b.
+    if (currentThreat == THREAT_CLEAR) {
+        if (clearSinceMs == 0) clearSinceMs = nowMs;
+        else if ((nowMs - clearSinceMs) > 60000) {
+            resetDiversityTracker();
+            clearSinceMs = nowMs;
+        }
+    } else {
+        clearSinceMs = 0;
     }
 
     return currentThreat;
