@@ -51,6 +51,10 @@ struct CadBandSummary {
     uint32_t          capturedMs;    // millis() when summary was produced
     bool              warmupReady;   // ambient filter has run >= MIN_AMBIENT_CYCLES
     bool              hwFault;       // cadHwFaultFlag debounced true
+    // Phase E addition: fast-confirmed CAD count (consecutiveHits >= 2, no
+    // time-persistence gate). Closes the LR1121 fast-FHSS detection gap where
+    // one confirmed tap on a slow scan cycle isn't enough to reach WARNING.
+    int fastConfirmedCadCount;
 };
 
 struct CadFskResult {

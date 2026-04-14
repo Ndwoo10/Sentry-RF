@@ -127,15 +127,14 @@ static bool freshRssiThisCycle = false;
 static int lastFastScore = 0;
 static int lastConfirmScore = 0;
 
-// ── Phase C: Shadow-mode candidate engine ────────────────────────────────────
-// Runs IN PARALLEL with the legacy assessThreat() scorer. Logs candidate-based
-// decisions via [CAND] serial lines for comparison but does NOT drive the
-// actual threat output — that still comes from assessThreat().
+// ── Candidate engine state (introduced Phase C, cutover Phase D) ─────────────
+// As of Phase D the candidate engine drives currentThreat and the FSM. The
+// pool, cached summaries, and per-evidence helpers below are the core state.
 
 static DetectionCandidate candidatePool[MAX_CANDIDATES] = {};
 
 // Cached sub-GHz CadBandSummary — populated by detectionEngineIngestCadBandSummary()
-// each cycle from main.cpp, consumed by the shadow-mode block in detectionEngineAssess().
+// each cycle from main.cpp, consumed by evaluateCandidateEngine().
 static CadBandSummary lastSubGHzSummary = {};
 static bool lastSubGHzSummaryValid = false;
 
@@ -160,25 +159,48 @@ static uint8_t evidenceScore(const EvidenceTerm& e, uint32_t nowMs) {
     return evidenceLive(e, nowMs) ? e.score : (uint8_t)0;
 }
 
+// Phase E: `ready` is REQUIRED, no default. Each call site must compute the
+// per-evidence readiness gate from Part 7 of the spec. `ready=false` means
+// the evidence won't contribute to scoring even though it was observed.
 static void refreshEvidence(EvidenceTerm& e, uint8_t score, uint32_t ttlMs,
-                            uint32_t nowMs, bool ready = true) {
+                            uint32_t nowMs, bool ready) {
     e.score = score;
     e.lastSeenMs = nowMs;
     e.ttlMs = ttlMs;
     e.ready = ready;
 }
 
+// Phase E helper: does the candidate already have any live FAST-side
+// (CAD/FSK/FHSS/cluster) evidence? Used as one of the three ways to satisfy
+// the sweepSub readiness gate (see Part 7).
+static bool candHasLiveFastEvidence(const DetectionCandidate& c, uint32_t nowMs);
+
 static bool allEvidenceDead(const DetectionCandidate& c, uint32_t nowMs) {
     return !evidenceLive(c.cadConfirmed, nowMs) &&
            !evidenceLive(c.cadPending, nowMs) &&
            !evidenceLive(c.fskConfirmed, nowMs) &&
            !evidenceLive(c.fhssSub, nowMs) &&
+           !evidenceLive(c.fhssCluster, nowMs) &&
            !evidenceLive(c.sweepSub, nowMs) &&
            !evidenceLive(c.protoSub, nowMs) &&
+           !evidenceLive(c.bandEnergy, nowMs) &&
            !evidenceLive(c.cad24, nowMs) &&
            !evidenceLive(c.proto24, nowMs) &&
            !evidenceLive(c.rid, nowMs) &&
            !evidenceLive(c.gnss, nowMs);
+}
+
+// Phase E: helper for sweepSub readiness gate. Sweep evidence is allowed to
+// score if the candidate already has any live fast-side evidence (CAD/FSK/
+// FHSS/cluster) — the rationale is "we already have radio-side proof that
+// this candidate is real, so a corroborating sweep peak is trustworthy even
+// if the ambient filter hasn't fully learned the bench yet."
+static bool candHasLiveFastEvidence(const DetectionCandidate& c, uint32_t nowMs) {
+    return evidenceLive(c.cadConfirmed, nowMs) ||
+           evidenceLive(c.cadPending,   nowMs) ||
+           evidenceLive(c.fskConfirmed, nowMs) ||
+           evidenceLive(c.fhssSub,      nowMs) ||
+           evidenceLive(c.fhssCluster,  nowMs);
 }
 
 static void ageOutCandidates(DetectionCandidate* pool, uint8_t count, uint32_t nowMs) {
@@ -257,17 +279,26 @@ static uint8_t computeFastScore(const DetectionCandidate& c, uint32_t nowMs) {
 
     uint16_t divBonus = evidenceLive(c.fhssSub, nowMs) ? FAST_SCORE_DIVERSITY_BONUS : 0;
 
-    uint16_t total = cadRaw + fskRaw + divBonus;
+    // Phase E: cluster bonus closes the LR1121 fast-FHSS gap. Only fires when
+    // the cluster evidence term is live (anchor + spread + fast-confirmed),
+    // adding FAST_SCORE_FHSS_CLUSTER points so 1 confirmed sub-GHz tap (10) +
+    // diversity bonus (20) + cluster (15) = 45 → crosses WARNING fast threshold.
+    uint16_t clusterBonus = evidenceLive(c.fhssCluster, nowMs)
+                                ? (uint16_t)evidenceScore(c.fhssCluster, nowMs)
+                                : (uint16_t)0;
+
+    uint16_t total = cadRaw + fskRaw + divBonus + clusterBonus;
     return (total > 255) ? (uint8_t)255 : (uint8_t)total;
 }
 
 static uint8_t computeConfirmScore(const DetectionCandidate& c, uint32_t nowMs) {
-    uint16_t total = (uint16_t)evidenceScore(c.sweepSub, nowMs) +
-                     (uint16_t)evidenceScore(c.protoSub, nowMs) +
-                     (uint16_t)evidenceScore(c.cad24, nowMs) +
-                     (uint16_t)evidenceScore(c.proto24, nowMs) +
-                     (uint16_t)evidenceScore(c.rid, nowMs) +
-                     (uint16_t)evidenceScore(c.gnss, nowMs);
+    uint16_t total = (uint16_t)evidenceScore(c.sweepSub,   nowMs) +
+                     (uint16_t)evidenceScore(c.protoSub,   nowMs) +
+                     (uint16_t)evidenceScore(c.bandEnergy, nowMs) +  // Phase E
+                     (uint16_t)evidenceScore(c.cad24,      nowMs) +
+                     (uint16_t)evidenceScore(c.proto24,    nowMs) +
+                     (uint16_t)evidenceScore(c.rid,        nowMs) +
+                     (uint16_t)evidenceScore(c.gnss,       nowMs);
     return (total > 255) ? (uint8_t)255 : (uint8_t)total;
 }
 
@@ -292,7 +323,14 @@ static ThreatDecision chooseBestCandidate(DetectionCandidate* pool, uint8_t coun
                                           uint32_t nowMs) {
     ageOutCandidates(pool, count, nowMs);
 
-    ThreatDecision best = { THREAT_CLEAR, 0, 0, 0.0f, 0, false };
+    ThreatDecision best = {};
+    best.level          = THREAT_CLEAR;
+    best.committedLevel = THREAT_CLEAR;
+    best.fastScore      = 0;
+    best.confirmScore   = 0;
+    best.anchorFreq     = 0.0f;
+    best.bandMask       = 0;
+    best.hasCandidate   = false;
 
     for (uint8_t i = 0; i < count; i++) {
         DetectionCandidate& c = pool[i];
@@ -340,7 +378,7 @@ static ThreatDecision chooseBestCandidate(DetectionCandidate* pool, uint8_t coun
 }
 
 // Public: main.cpp caches the full sub-GHz CadBandSummary here once per cycle
-// so the Phase C shadow engine can read the anchor + full counts. The existing
+// so the candidate engine can read the anchor + full counts. The existing
 // detectionEngineIngestCad() primitive-int path is unchanged.
 void detectionEngineIngestCadBandSummary(const CadBandSummary& subGHz) {
     lastSubGHzSummary = subGHz;
@@ -742,11 +780,15 @@ static void emitCandidateThreatEvent(ThreatLevel level, float anchorFreq) {
     xQueueSend(detectionQueue, &event, 0);
 }
 
+// Phase D+: assessThreat() runs in parallel with the candidate engine for
+// [CAND-DELTA] regression-alarm comparison only. Its return value is logged
+// against the candidate decision but does NOT drive currentThreat or fire
+// emitThreatTransition — both moved to detectionEngineAssess() and are
+// driven exclusively by the candidate engine.
 static ThreatLevel assessThreat(const IntegrityStatus& integrity) {
     ThreatLevel prevThreat = legacyThreat;
-    // ── Two-layer scoring (v1.8.0) ───────────────────────────────────
-    // FAST score: CAD-only evidence. Updates every cycle. Drives ADVISORY
-    // immediately from cycle 1 — no warmup gate needed.
+    // ── Two-layer scoring (legacy reference — comparison only) ───────
+    // FAST score: CAD-only evidence. Updates every cycle.
     //
     // CAD/FSK weights scale per-tap (10/tap CAD, 15/tap FSK) so a single
     // infrastructure tap contributes 10 points (ADVISORY only) while 4+
@@ -1031,10 +1073,16 @@ void detectionEngineIngestSweep(const ScanResult& scan, const ScanResult24* scan
         cleanupProtoTracking();
     }
 
-    // ── Phase D.2: attach sweep evidence to best active sub-GHz candidate ──
-    // The sweep is broad-spectrum, so it attaches to whichever sub-GHz
-    // candidate is currently strongest (highest fast score). First-attach
-    // gets WEIGHT_CONFIRM_PEAK; persistent (already-live) gets 2x.
+    // ── Phase D.2 + Phase E: attach sweep evidence to best active sub-GHz
+    // candidate, with per-evidence readiness gates from spec Part 7.
+    //
+    // sweepSub:   ready if ambientFilterReady() OR peak matches a known proto
+    //             family OR the candidate already has live fast evidence
+    // protoSub:   ready when match.protocol != nullptr (implied by protoMatch)
+    // bandEnergy: ready only if ambientFilterReady() — band-energy baseline
+    //             isn't trustworthy until the ambient filter has learned
+    // proto24:    confirmer-only, attached using the same lone/dominant
+    //             sub-GHz candidate rule used for cad24
     {
         const uint32_t nowMs = (uint32_t)millis();
         DetectionCandidate* sweepCand =
@@ -1042,37 +1090,101 @@ void detectionEngineIngestSweep(const ScanResult& scan, const ScanResult24* scan
         if (sweepCand) {
             bool peakCorroborates =
                 (countPersistentDroneUS() + countPersistentDrone()) > 0;
+            // protoMatch implies match.protocol != nullptr (countPersistent*
+            // only counts taps with a non-null protocol pointer), so this is
+            // also the protoSub readiness gate.
             bool protoMatch =
                 (countPersistentProtocolUS() + countPersistentProtocol(false)) > 0;
+
             if (peakCorroborates) {
+                // sweepSub readiness: ambient filter ready, OR the peak comes
+                // with a known protocol (peak/proto are tracked together so
+                // protoMatch implies a known family), OR the candidate
+                // already has independent fast-side evidence.
+                bool sweepReady = ambientFilterReady() || protoMatch ||
+                                  candHasLiveFastEvidence(*sweepCand, nowMs);
                 uint8_t newScore = evidenceLive(sweepCand->sweepSub, nowMs)
                                        ? (uint8_t)(WEIGHT_CONFIRM_PEAK * 2)
                                        : (uint8_t)WEIGHT_CONFIRM_PEAK;
                 refreshEvidence(sweepCand->sweepSub, newScore,
-                                TTL_SWEEP_SUB_MS, nowMs);
+                                TTL_SWEEP_SUB_MS, nowMs, /*ready=*/sweepReady);
             }
             if (protoMatch) {
+                // protoSub readiness: protoMatch above already requires a
+                // non-null protocol pointer, so always ready when refreshed.
                 refreshEvidence(sweepCand->protoSub,
                                 (uint8_t)WEIGHT_CONFIRM_PROTO,
-                                TTL_PROTO_SUB_MS, nowMs);
+                                TTL_PROTO_SUB_MS, nowMs, /*ready=*/true);
+            }
+            // Phase E bandEnergy: candidate-confirm only, gated on ambient
+            // filter readiness. The bandEnergyElevated flag is computed in
+            // updateBandEnergy() from the same sweep we just ingested.
+            if (bandEnergyElevated) {
+                bool beReady = ambientFilterReady();
+                refreshEvidence(sweepCand->bandEnergy,
+                                (uint8_t)WEIGHT_CONFIRM_BAND_ENERGY,
+                                TTL_SWEEP_SUB_MS, nowMs, /*ready=*/beReady);
+            }
+        }
+
+        // Phase E: proto24 attachment — confirmer-only, same lone/dominant
+        // sub-GHz candidate rule used for cad24. Independent of sweepCand
+        // because it iterates the full pool and applies the dominance check.
+        int proto24Count = countPersistentProtocol(true);
+        if (proto24Count > 0) {
+            int liveSubGHzCount = 0;
+            DetectionCandidate* bestSubGHz = nullptr;
+            uint8_t bestFast = 0;
+            uint8_t secondFast = 0;
+            for (uint8_t i = 0; i < MAX_CANDIDATES; i++) {
+                DetectionCandidate& ccc = candidatePool[i];
+                if (!ccc.active || !(ccc.bandMask & 0x01)) continue;
+                if ((nowMs - ccc.lastSeenMs) > CAND_ASSOC_24_TTL_MS) continue;
+                liveSubGHzCount++;
+                uint8_t f = computeFastScore(ccc, nowMs);
+                if (f > bestFast) {
+                    secondFast = bestFast;
+                    bestFast = f;
+                    bestSubGHz = &ccc;
+                } else if (f > secondFast) {
+                    secondFast = f;
+                }
+            }
+            bool canAttachProto24 = (liveSubGHzCount == 1) ||
+                                    (liveSubGHzCount >= 2 &&
+                                     (uint16_t)bestFast >= (uint16_t)secondFast + 15);
+            if (canAttachProto24 && bestSubGHz) {
+                refreshEvidence(bestSubGHz->proto24,
+                                (uint8_t)WEIGHT_CONFIRM_PROTO,
+                                TTL_PROTO24_MS, nowMs, /*ready=*/true);
+                bestSubGHz->bandMask |= 0x02;
+                Serial.printf("[CAND] 2.4GHz proto confirmed — attached to anchor=%.1fMHz\n",
+                              bestSubGHz->anchorFreq);
             }
         }
     }
 }
 
-// ── Phase D: Candidate engine evaluation (cutover) ──────────────────────────
+// ── Candidate engine evaluation ─────────────────────────────────────────────
 // Runs from detectionEngineAssess() on every cycle. Reads the cached sub-GHz
 // (and 2.4 GHz on LR1121) CadBandSummary, refreshes evidence on the matching
-// candidate, attaches cross-domain (RID/GNSS) evidence, and returns a
-// ThreatDecision. As of Phase D, the returned decision is the REAL threat
-// output — no longer shadow mode.
-static ThreatDecision evaluateCandidateEngine(const IntegrityStatus& integrity,
+// candidate per Part 7 readiness gates, attaches cross-domain (RID/GNSS)
+// evidence, and returns a ThreatDecision that drives the FSM (Phase D
+// cutover, no longer shadow mode).
+//
+// Phase E: per-evidence readiness gates from spec Part 7 are enforced via the
+// explicit `ready` parameter on every refreshEvidence call. The old global
+// warmup-cap on candidate seeding has been removed — pre-warmup safety now
+// comes from per-evidence readiness (sweepSub/bandEnergy gated on
+// ambientFilterReady) rather than a phase-wide branch on s.warmupReady.
+static ThreatDecision evaluateCandidateEngine(const GpsData& gps,
+                                              const IntegrityStatus& integrity,
                                               uint32_t nowMs) {
     // ── 1. Seed / refresh a sub-GHz candidate from the cached band summary ──
-    // Phase D.1: TWO seed paths are allowed post-warmup — confirmed CAD/FSK
-    // (strongSeed) OR marginal multi-tap FHSS (marginalSeed). The latter
-    // closes the SX1262 marginal-acquisition gap found in Phase C.2 testing
-    // where pending taps + persistent diversity weren't enough to seed.
+    // Phase E: NO warmup-phase branch on candidate creation. The non-ambient
+    // anchor requirement is already enforced by chooseAnchor() in cad_scanner
+    // (which filters tap.isAmbient). The 2.4 GHz "never seeds" rule is
+    // preserved — only the cached sub-GHz summary is checked here.
     if (lastSubGHzSummaryValid && lastSubGHzSummary.anchor.valid) {
         const CadBandSummary& s = lastSubGHzSummary;
         const float anchorFreq  = s.anchor.frequency;
@@ -1082,21 +1194,11 @@ static ThreatDecision evaluateCandidateEngine(const IntegrityStatus& integrity,
         bool haveFhss = (s.persistentDiversityCount > 0) ||
                         (s.diversityVelocity >= DIVERSITY_VELOCITY_FHSS_MIN);
 
-        // Phase D.1 (corrected): seed gate. Pre-warmup is strict (2+ confirmed
-        // CAD). Post-warmup accepts confirmed CAD/FSK OR a single pending tap.
-        // The pending-tap path already existed in Phase C.2 — the prior
-        // attempt at a separate marginalSeed condition was redundant. The
-        // real fix for marginal SX1262 acquisitions is the extended
-        // TTL_CAD_PENDING_MS in sentry_config.h, which keeps a pending-tap
-        // candidate alive long enough for FHSS diversity to attach.
-        bool seedAllowed = false;
-        if (!s.warmupReady) {
-            seedAllowed = (s.confirmedCadCount >= 2);
-        } else {
-            seedAllowed = (s.confirmedCadCount > 0) ||
-                          (s.confirmedFskCount > 0) ||
-                          (s.strongPendingCad > 0);
-        }
+        // Phase E: simple seed gate. Confirmed CAD, confirmed FSK, or any
+        // strong-pending CAD all permit seeding. No pre/post-warmup branch.
+        bool seedAllowed = (s.confirmedCadCount > 0) ||
+                           (s.confirmedFskCount > 0) ||
+                           (s.strongPendingCad > 0);
 
         DetectionCandidate* c = findCandidateForBandFreq(
             candidatePool, MAX_CANDIDATES, anchorFreq, 0x01 /* sub-GHz */, nowMs);
@@ -1126,17 +1228,21 @@ static ThreatDecision evaluateCandidateEngine(const IntegrityStatus& integrity,
         if (c) {
             c->lastSeenMs = nowMs;
 
-            // CAD confirmed/pending scale per-tap matching legacy fast score.
+            // ── Per-evidence readiness gates per spec Part 7 ────────────
+            // cadConfirmed / cadPending / fskConfirmed / fhssSub / fhssCluster
+            // are all "always ready" — radio-side observations are trustworthy
+            // from cycle 1.
+
             if (haveCad) {
                 uint16_t cadPts = (uint16_t)s.confirmedCadCount * FAST_SCORE_CAD_PER_TAP;
                 if (cadPts > FAST_SCORE_CAD_CAP) cadPts = FAST_SCORE_CAD_CAP;
                 refreshEvidence(c->cadConfirmed, (uint8_t)cadPts,
-                                TTL_CAD_CONFIRMED_MS, nowMs);
+                                TTL_CAD_CONFIRMED_MS, nowMs, /*ready=*/true);
 
                 uint16_t pendPts = (uint16_t)s.strongPendingCad * (FAST_SCORE_CAD_PER_TAP / 2);
                 if (pendPts > FAST_SCORE_CAD_CAP) pendPts = FAST_SCORE_CAD_CAP;
                 refreshEvidence(c->cadPending, (uint8_t)pendPts,
-                                TTL_CAD_PENDING_MS, nowMs);
+                                TTL_CAD_PENDING_MS, nowMs, /*ready=*/true);
 
                 if (s.confirmedCadCount > 0 && c->state == CAND_SEEDING) {
                     c->state = CAND_TRACKING;
@@ -1147,19 +1253,39 @@ static ThreatDecision evaluateCandidateEngine(const IntegrityStatus& integrity,
                 uint16_t fskPts = (uint16_t)s.confirmedFskCount * FAST_SCORE_FSK_PER_TAP;
                 if (fskPts > FAST_SCORE_FSK_CAP) fskPts = FAST_SCORE_FSK_CAP;
                 refreshEvidence(c->fskConfirmed, (uint8_t)fskPts,
-                                TTL_FSK_CONFIRMED_MS, nowMs);
+                                TTL_FSK_CONFIRMED_MS, nowMs, /*ready=*/true);
                 if (c->state == CAND_SEEDING) c->state = CAND_TRACKING;
             }
 
-            // FHSS may refresh — never seeds (Fix 1).
+            // FHSS may refresh — never seeds (Phase C.2 Fix 1).
             if (haveFhss) {
-                refreshEvidence(c->fhssSub, 1, TTL_FHSS_SUB_MS, nowMs);
+                refreshEvidence(c->fhssSub, 1, TTL_FHSS_SUB_MS, nowMs, /*ready=*/true);
             }
 
-            // Phase D Stabilization: sweepSub/protoSub are now refreshed
-            // exclusively from detectionEngineIngestSweep() (Phase D.2 block).
-            // The old freshRssiThisCycle refresh here was overwriting the
-            // first-attach=5 / persistent=10 escalation and is removed.
+            // Phase E cluster evidence — closes the LR1121 fast-FHSS gap
+            // where consecutiveHits>=3 is rarely achieved on a single channel
+            // due to long scan cycles. Gated on:
+            //   diversityCount >= 8     (real FHSS shows 20+; bench infra <8)
+            //   fastConfirmedCadCount >= 1   (at least one tap at hits>=2)
+            //
+            // Empirical tuning: COM9 cold-boot bench produced div<=6 with
+            // fastConf=1 from infrastructure pickups, which fired a false
+            // ADVISORY at div>=3. Bumping to div>=8 and requiring
+            // fastConfirmedCadCount (no `|| confirmedCadCount` fallback)
+            // eliminates the bench false fire while preserving the LR1121
+            // fast-FHSS path (JJ produces div>=20).
+            //
+            // `s` is lastSubGHzSummary — sub-GHz band only — so chronic
+            // 2.4 GHz noise cannot trigger this gate.
+            bool haveCluster = (s.diversityCount >= 8) &&
+                               (s.fastConfirmedCadCount >= 1);
+            if (haveCluster) {
+                refreshEvidence(c->fhssCluster, FAST_SCORE_FHSS_CLUSTER,
+                                TTL_FHSS_CLUSTER_MS, nowMs, /*ready=*/true);
+            }
+
+            // sweepSub / protoSub / bandEnergy / proto24 are refreshed in
+            // detectionEngineIngestSweep() — single-writer rule from Phase D.2.
         }
     }
 
@@ -1200,7 +1326,10 @@ static ThreatDecision evaluateCandidateEngine(const IntegrityStatus& integrity,
             }
 
             if (canAttach24 && bestSubGHz) {
-                refreshEvidence(bestSubGHz->cad24, 10, TTL_CAD24_MS, nowMs);
+                // Phase E: cad24 readiness — confirmer-only on existing live
+                // sub-GHz candidate. The lone/dominant guard above IS the gate.
+                refreshEvidence(bestSubGHz->cad24, 10, TTL_CAD24_MS, nowMs,
+                                /*ready=*/true);
                 bestSubGHz->bandMask |= 0x02;
                 Serial.printf("[CAND] 2.4GHz confirmed — attached to anchor=%.1fMHz\n",
                               bestSubGHz->anchorFreq);
@@ -1232,12 +1361,19 @@ static ThreatDecision evaluateCandidateEngine(const IntegrityStatus& integrity,
         }
     }
 
+    // Phase E readiness gates:
+    //  - rid: always ready (independent hardware)
+    //  - gnss: ready only when GPS has a valid 3D fix
+    bool gnssReady = (gps.fixType >= 3);
+
     if (activeCount == 1 && loneCandidate != nullptr) {
         if (ridFresh) {
-            refreshEvidence(loneCandidate->rid, WEIGHT_CONFIRM_REMOTE_ID, TTL_RID_MS, nowMs);
+            refreshEvidence(loneCandidate->rid, WEIGHT_CONFIRM_REMOTE_ID,
+                            TTL_RID_MS, nowMs, /*ready=*/true);
         }
         if (gnssAnomaly) {
-            refreshEvidence(loneCandidate->gnss, WEIGHT_CONFIRM_GNSS_TEMPORAL, TTL_GNSS_MS, nowMs);
+            refreshEvidence(loneCandidate->gnss, WEIGHT_CONFIRM_GNSS_TEMPORAL,
+                            TTL_GNSS_MS, nowMs, /*ready=*/gnssReady);
         }
     } else {
         if (ridFresh) {
@@ -1248,31 +1384,25 @@ static ThreatDecision evaluateCandidateEngine(const IntegrityStatus& integrity,
         }
     }
 
-    // ── 3. Run scoring policy, log per-cycle decision ────────────────────────
+    // ── 3. Run scoring policy and return decision ────────────────────────────
+    // Phase E: [CAND] log line moved to detectionEngineAssess so it can print
+    // both the raw decision level AND the post-hysteresis committed level.
     ThreatDecision decision = chooseBestCandidate(candidatePool, MAX_CANDIDATES, nowMs);
-
-    Serial.printf("[CAND] fast=%u conf=%u level=%s anchor=%.1fMHz band=0x%02X has=%d\n",
-                  decision.fastScore, decision.confirmScore,
-                  threatName(decision.level),
-                  decision.anchorFreq, decision.bandMask,
-                  decision.hasCandidate ? 1 : 0);
-
+    decision.committedLevel = decision.level;  // placeholder, overwritten in assess
     return decision;
 }
 
 ThreatLevel detectionEngineAssess(const GpsData& gps, const IntegrityStatus& integrity) {
-    (void)gps;  // reserved for future geo-gated scoring
-
-    // Phase D: legacy assessThreat still runs for [CAND-DELTA] regression
-    // alarm comparison and to drive the detection-event queue (CAD/FSK/proto
-    // events still fire on legacy transitions). Its currentThreat write and
-    // emitThreatTransition call were removed — those are now driven below
-    // from the candidate decision.
+    // Phase D+: legacy assessThreat() is comparison-only — it does not commit
+    // currentThreat or emit FSM transitions. Its returned level is logged
+    // against the candidate decision via [CAND-DELTA] for regression-alarm.
     ThreatLevel legacyLevel = assessThreat(integrity);
 
-    // Phase D: candidate engine is now the PRIMARY threat decider.
+    // Candidate engine is the primary (and only) threat decider as of Phase D.
+    // Phase E: gps is now passed through to evaluateCandidateEngine so the
+    // gnss readiness gate can check fixType.
     const uint32_t nowMs = (uint32_t)millis();
-    ThreatDecision decision = evaluateCandidateEngine(integrity, nowMs);
+    ThreatDecision decision = evaluateCandidateEngine(gps, integrity, nowMs);
 
     // Update display/log score fields from raw decision (not from currentThreat)
     lastFastScore    = (int)decision.fastScore;
@@ -1299,6 +1429,19 @@ ThreatLevel detectionEngineAssess(const GpsData& gps, const IntegrityStatus& int
             candidateThreatEventMs = nowMs;
         }
     }
+
+    // Phase E: stamp the post-hysteresis committed level back onto the
+    // decision so the [CAND] log line below can print both raw and committed.
+    decision.committedLevel = currentThreat;
+
+    // Phase E: [CAND] log line — prints raw decision AND committed (post-
+    // hysteresis) levels so [CAND] level matches what the FSM actually drives.
+    Serial.printf("[CAND] raw=%s committed=%s fast=%u conf=%u anchor=%.1fMHz band=0x%02X has=%d\n",
+                  threatName(decision.level),
+                  threatName(decision.committedLevel),
+                  decision.fastScore, decision.confirmScore,
+                  decision.anchorFreq, decision.bandMask,
+                  decision.hasCandidate ? 1 : 0);
 
     // Fire transition emitter — drives buzzer / LED / OLED / [FSM] log
     emitThreatTransition(prevThreat, currentThreat, nowMs);
