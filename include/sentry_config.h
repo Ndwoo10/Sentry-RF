@@ -49,17 +49,15 @@ static const unsigned long COOLDOWN_MS   = 5000;    // ms before threat decays o
 #define LR24_CAD_PERIOD_MS       6000
 
 // RSSI_SWEEP_INTERVAL_MS is consumed in shared loRaScanTask code in
-// main.cpp and must be tuned per board. The LR1121 has ~2.0 s short
-// cycles, so 8000 ms fires the sweep every ~4th cycle. The SX1262
-// boards (t3s3, heltec_v3) have ~1.0 s short cycles, so 3000 ms fires
-// the sweep every ~3rd cycle — matching the old cycleCount % 3 cadence
-// and preserving sweep-based corroboration/persistence latency on
-// non-LR1121 targets.
-#ifdef BOARD_T3S3_LR1121
+// main.cpp. Both SX1262 and LR1121 need a period strictly greater than
+// their long-cycle time (cycle-with-sweep), otherwise the timer expires
+// during the same iteration and the gate degrades to "fire every cycle".
+// Measured long cycles: LR1121 ~4.3 s, SX1262 ~3.9 s. 8000 ms leaves
+// comfortable headroom on both boards and produces roughly the old
+// every-3rd-cycle cadence at each board's native tempo. Also: the timer
+// is advanced AFTER scannerSweep() completes (see main.cpp) so the
+// period measures sweep-end → next-fire-start, not start → start.
 #define RSSI_SWEEP_INTERVAL_MS   8000
-#else
-#define RSSI_SWEEP_INTERVAL_MS   3000
-#endif
 
 // ── Rapid-Clear Path ──────────────────────────────────────────────────
 static const unsigned long RAPID_CLEAR_CLEAN_MS = 5000;  // ms of continuous clean state to force CLEAR
