@@ -103,6 +103,12 @@ static void updateBandEnergy(const float* rssi) {
 // ── Threat state machine ────────────────────────────────────────────────────
 
 static ThreatLevel currentThreat = THREAT_CLEAR;
+// Phase D: assessThreat() runs in parallel for [CAND-DELTA] regression-alarm
+// comparison only. Its desired/escalation/cooldown logic is preserved but it
+// MUST NOT mutate the global currentThreat — that's owned by the candidate
+// engine path now. legacyThreat is the legacy scorer's private "current"
+// value used solely for its internal cooldown/escalation math.
+static ThreatLevel legacyThreat = THREAT_CLEAR;
 static unsigned long lastThreatEventMs = 0;
 static uint32_t lastDetectionMs = 0;
 // COOLDOWN_MS from sentry_config.h
@@ -707,7 +713,7 @@ static void emitThreatTransition(ThreatLevel prev, ThreatLevel next, uint32_t no
 }
 
 static ThreatLevel assessThreat(const IntegrityStatus& integrity) {
-    ThreatLevel prevThreat = currentThreat;
+    ThreatLevel prevThreat = legacyThreat;
     // ── Two-layer scoring (v1.8.0) ───────────────────────────────────
     // FAST score: CAD-only evidence. Updates every cycle. Drives ADVISORY
     // immediately from cycle 1 — no warmup gate needed.
@@ -800,7 +806,7 @@ static ThreatLevel assessThreat(const IntegrityStatus& integrity) {
         bandEnergyElevated = false;
         cleanSinceMs = 0;
         clearSinceMs = 0;
-        currentThreat = THREAT_CLEAR;
+        legacyThreat = THREAT_CLEAR;
         desired = THREAT_CLEAR;
         lastThreatEventMs = millis();
     }
@@ -810,22 +816,22 @@ static ThreatLevel assessThreat(const IntegrityStatus& integrity) {
     // Escalation: jump directly to the level evidence supports (fast up).
     // This replaces the old one-step-per-cycle limiter which delayed
     // legitimate detections by N cycles during escalation.
-    if (desired > currentThreat) {
-        currentThreat = desired;
+    if (desired > legacyThreat) {
+        legacyThreat = desired;
         lastThreatEventMs = now;
-    } else if (desired == currentThreat && currentThreat > THREAT_CLEAR) {
+    } else if (desired == legacyThreat && legacyThreat > THREAT_CLEAR) {
         // Steady state at evidence-supported level — reset cooldown timer
         // so we don't decay while evidence is still present.
         lastThreatEventMs = now;
     }
 
     // Cooldown: decay one step every COOLDOWN_MS when evidence weakens
-    if (desired < currentThreat && currentThreat > THREAT_CLEAR) {
+    if (desired < legacyThreat && legacyThreat > THREAT_CLEAR) {
         if (now - lastThreatEventMs > COOLDOWN_MS) {
-            desired = (ThreatLevel)(currentThreat - 1);
+            desired = (ThreatLevel)(legacyThreat - 1);
             lastThreatEventMs = now;
         } else {
-            desired = currentThreat;
+            desired = legacyThreat;
         }
     }
 
@@ -841,7 +847,7 @@ static ThreatLevel assessThreat(const IntegrityStatus& integrity) {
 
     if (allClean) {
         if (cleanSinceMs == 0) cleanSinceMs = now;
-        if ((now - cleanSinceMs) >= RAPID_CLEAR_CLEAN_MS && currentThreat >= THREAT_WARNING) {
+        if ((now - cleanSinceMs) >= RAPID_CLEAR_CLEAN_MS && legacyThreat >= THREAT_WARNING) {
             Serial.printf("[RAPID-CLEAR] %lums clean — forcing CLEAR\n", now - cleanSinceMs);
             desired = THREAT_CLEAR;
             cleanSinceMs = 0;
@@ -853,7 +859,7 @@ static ThreatLevel assessThreat(const IntegrityStatus& integrity) {
 
     // Sustained-CLEAR diversity reset: if CLEAR for 60 continuous seconds,
     // reset the diversity tracker to prevent slow drift on LoRa-rich bench.
-    if (desired == THREAT_CLEAR && currentThreat == THREAT_CLEAR) {
+    if (desired == THREAT_CLEAR && legacyThreat == THREAT_CLEAR) {
         if (clearSinceMs == 0) clearSinceMs = now;
         else if ((now - clearSinceMs) > 60000) {
             resetDiversityTracker();
@@ -918,6 +924,7 @@ void detectionEngineInit() {
     bandEnergyElevated = false;
     clearSinceMs = 0;
     currentThreat = THREAT_CLEAR;
+    legacyThreat  = THREAT_CLEAR;
     lastThreatEventMs = 0;
     ambientFilterInit();
 }
