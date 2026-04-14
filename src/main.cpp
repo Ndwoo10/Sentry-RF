@@ -164,11 +164,11 @@ static void loRaScanTask(void* param) {
         // ── PHASE 2: RSSI sweep on its own wall-clock cadence ──────
         // Phase F (revised): sweep fires when nextSubGHzSweepMs has been
         // crossed, independent of CAD cycle duration. The period
-        // (RSSI_SWEEP_INTERVAL_MS) must exceed the short-cycle wall
-        // time so the timer actually skips cycles.
+        // (RSSI_SWEEP_INTERVAL_MS) must exceed the long-cycle wall time
+        // (cycle-with-sweep) on every board so the timer actually skips
+        // iterations instead of re-firing immediately on the next pass.
         bool didRssi = false;
         if ((int32_t)(millis() - nextSubGHzSweepMs) >= 0) {
-            nextSubGHzSweepMs = millis() + RSSI_SWEEP_INTERVAL_MS;
             unsigned long sweepStart = millis();
             scannerSweep(radio, localResult);
 
@@ -198,6 +198,12 @@ static void loRaScanTask(void* param) {
                 systemState.threatLevel = threat;
                 xSemaphoreGive(stateMutex);
             }
+
+            // Advance timer AFTER sweep completes so the period is measured
+            // from sweep-end to next-fire-start. Advancing before the sweep
+            // would make the next deadline expire while the current sweep
+            // is still running, causing the gate to fire on every iteration.
+            nextSubGHzSweepMs = millis() + RSSI_SWEEP_INTERVAL_MS;
         }
 
         // Log to SD/SPIFFS — zero-init prevents garbage if mutex path is skipped.
