@@ -190,6 +190,7 @@ static bool allEvidenceDead(const DetectionCandidate& c, uint32_t nowMs) {
            !evidenceLive(c.bandEnergy, nowMs) &&
            !evidenceLive(c.cad24, nowMs) &&
            !evidenceLive(c.proto24, nowMs) &&
+           !evidenceLive(c.bwWide, nowMs) &&
            !evidenceLive(c.rid, nowMs) &&
            !evidenceLive(c.gnss, nowMs);
 }
@@ -369,6 +370,7 @@ static uint8_t computeConfirmScore(const DetectionCandidate& c, uint32_t nowMs) 
                      (uint16_t)evidenceScore(c.bandEnergy, nowMs) +  // Phase E
                      (uint16_t)evidenceScore(c.cad24,      nowMs) +
                      (uint16_t)evidenceScore(c.proto24,    nowMs) +
+                     (uint16_t)evidenceScore(c.bwWide,     nowMs) +  // Phase I
                      (uint16_t)evidenceScore(c.rid,        nowMs) +
                      (uint16_t)evidenceScore(c.gnss,       nowMs);
     return (total > 255) ? (uint8_t)255 : (uint8_t)total;
@@ -498,9 +500,12 @@ static float computeNoiseFloor(const float* rssi, int count) {
 // PEAK_THRESHOLD_DB, PEAK_ABS_FLOOR_DBM, MAX_PEAKS from sentry_config.h
 
 struct DetectedPeak {
-    float frequency;
-    float rssi;
-    FreqMatch match;
+    float          frequency;
+    float          rssi;
+    FreqMatch      match;
+    int            adjacentBinCount;  // Phase I: contiguous bins > threshold
+    BandwidthClass bwClass;           // Phase I: bucketed width (NARROW/MED/WIDE)
+    int            peakBin;           // Phase I: bin index within the sweep
 };
 
 static int extractPeaks(const ScanResult& scan, float noiseFloor, DetectedPeak* peaks) {
@@ -526,10 +531,23 @@ static int extractPeaks(const ScanResult& scan, float noiseFloor, DetectedPeak* 
 
             float freq = SCAN_FREQ_START + (i * SCAN_FREQ_STEP);
 
+            // Phase I: bandwidth classification. Uses the same `threshold`
+            // already computed above (max(noiseFloor + PEAK_THRESHOLD_DB,
+            // PEAK_ABS_FLOOR_DBM)) so the adjacency run matches the gate
+            // that let the peak through in the first place.
+            int adjBins = countElevatedAdjacentBins(
+                scan.rssi, SCAN_BIN_COUNT, i, threshold);
+            BandwidthClass bw = (adjBins >= BW_WIDE_BIN_THRESHOLD)   ? BW_WIDE
+                              : (adjBins >= BW_MEDIUM_BIN_THRESHOLD) ? BW_MEDIUM
+                              : BW_NARROW;
+
             if (peakCount < MAX_PEAKS) {
-                peaks[peakCount].frequency = freq;
-                peaks[peakCount].rssi = peakRSSI;
-                peaks[peakCount].match = matchFrequency(freq);
+                peaks[peakCount].frequency        = freq;
+                peaks[peakCount].rssi             = peakRSSI;
+                peaks[peakCount].match            = matchFrequency(freq);
+                peaks[peakCount].adjacentBinCount = adjBins;
+                peaks[peakCount].bwClass          = bw;
+                peaks[peakCount].peakBin          = i;
                 peakCount++;
             } else {
                 int weakest = 0;
@@ -537,9 +555,12 @@ static int extractPeaks(const ScanResult& scan, float noiseFloor, DetectedPeak* 
                     if (peaks[p].rssi < peaks[weakest].rssi) weakest = p;
                 }
                 if (peakRSSI > peaks[weakest].rssi) {
-                    peaks[weakest].frequency = freq;
-                    peaks[weakest].rssi = peakRSSI;
-                    peaks[weakest].match = matchFrequency(freq);
+                    peaks[weakest].frequency        = freq;
+                    peaks[weakest].rssi             = peakRSSI;
+                    peaks[weakest].match            = matchFrequency(freq);
+                    peaks[weakest].adjacentBinCount = adjBins;
+                    peaks[weakest].bwClass          = bw;
+                    peaks[weakest].peakBin          = i;
                 }
             }
         }
@@ -694,9 +715,17 @@ static int extractPeaks24(const ScanResult24& scan, float noiseFloor, DetectedPe
             float freq = SCAN_24_START + (i * SCAN_24_STEP);
             if (isWiFiChannel(freq)) continue;
 
-            peaks[peakCount].frequency = freq;
-            peaks[peakCount].rssi = scan.rssi[i];
-            peaks[peakCount].match = matchFrequency24(freq);
+            int adjBins24 = countElevatedAdjacentBins(
+                scan.rssi, SCAN_24_BIN_COUNT, i, threshold);
+            BandwidthClass bw24 = (adjBins24 >= BW_WIDE_BIN_THRESHOLD)   ? BW_WIDE
+                                : (adjBins24 >= BW_MEDIUM_BIN_THRESHOLD) ? BW_MEDIUM
+                                : BW_NARROW;
+            peaks[peakCount].frequency        = freq;
+            peaks[peakCount].rssi             = scan.rssi[i];
+            peaks[peakCount].match            = matchFrequency24(freq);
+            peaks[peakCount].adjacentBinCount = adjBins24;
+            peaks[peakCount].bwClass          = bw24;
+            peaks[peakCount].peakBin          = i;
             peakCount++;
         }
     }
@@ -928,6 +957,57 @@ void detectionEngineIngestSweep(const ScanResult& scan, const ScanResult24* scan
     markAllUnseen();
     updateTracking(peaks, peakCount);
     updateProtoTracking(peaks, peakCount);
+
+    // Phase I: mirror the strongest-peak bandwidth class into SystemState so
+    // the JSONL logger can include it. Defaults to NARROW/0 when no peak
+    // survived extraction — which is honest (nothing elevated to classify).
+    {
+        uint8_t bwOut = BW_NARROW;
+        uint8_t binsOut = 0;
+        float   bestRssi = -200.0f;
+        for (int p = 0; p < peakCount; p++) {
+            if (peaks[p].rssi > bestRssi) {
+                bestRssi = peaks[p].rssi;
+                bwOut = (uint8_t)peaks[p].bwClass;
+                binsOut = (uint8_t)((peaks[p].adjacentBinCount > 255)
+                                    ? 255 : peaks[p].adjacentBinCount);
+            }
+        }
+        if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+            systemState.peakBwClass = bwOut;
+            systemState.peakAdjBins = binsOut;
+            xSemaphoreGive(stateMutex);
+        }
+    }
+
+    // Phase I: log wide-band signals and attach confirmer evidence. The
+    // existing extractPeaks() spectral-width filter rejects anything with
+    // narrowWidth > 6 bins within 6 dB of peak, so BW_WIDE here reflects an
+    // asymmetric "sharp peak + long shoulder" shape — the few wide-ish
+    // emissions that slip past. True flat-top OcuSync OFDM won't survive the
+    // filter to reach this point; see docs/dji.md follow-up for a separate
+    // wide-band pipeline if that's needed.
+    {
+        const uint32_t nowMs = (uint32_t)millis();
+        for (int p = 0; p < peakCount; p++) {
+            if (peaks[p].bwClass != BW_WIDE) continue;
+            float approxMHz = peaks[p].adjacentBinCount * SCAN_FREQ_STEP;
+            Serial.printf("[BW] Wide-band signal detected: %.1f MHz, %d bins elevated (~%.1f MHz)\n",
+                          peaks[p].frequency, peaks[p].adjacentBinCount, approxMHz);
+            // Attach to any active sub-GHz candidate whose anchor overlaps
+            // the peak's center frequency (±CAND_ASSOC_SUB_MHZ). Same
+            // association window as the sweep/proto confirmers.
+            for (uint8_t c = 0; c < MAX_CANDIDATES; c++) {
+                DetectionCandidate& cand = candidatePool[c];
+                if (!cand.active || !(cand.bandMask & 0x01)) continue;
+                if (fabsf(peaks[p].frequency - cand.anchorFreq)
+                    > CAND_ASSOC_SUB_MHZ) continue;
+                refreshEvidence(cand.bwWide,
+                                (uint8_t)WEIGHT_CONFIRM_BW_WIDE,
+                                TTL_BW_WIDE_MS, nowMs, /*ready=*/true);
+            }
+        }
+    }
 
     // 2.4 GHz pipeline (LR1121 only)
     if (scan24 != nullptr && scan24->valid && scan24->seq != lastProcessed24Seq) {

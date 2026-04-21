@@ -16,6 +16,19 @@ enum ThreatLevel : uint8_t {
     THREAT_CRITICAL = 3
 };
 
+// Phase I: bandwidth classification for RSSI peaks. Bin spacing is 200 kHz on
+// the sub-GHz sweep, so the width ranges translate as:
+//   BW_NARROW  1-3 bins     ~0-600 kHz    ELRS, Crossfire, FrSky
+//   BW_MEDIUM  4-9 bins     ~600 kHz-1.8 MHz   unknown/other
+//   BW_WIDE    10+ bins     ~1.8 MHz+     DJI OcuSync OFDM
+// Populated per-peak by the classifier; the strongest-peak class is mirrored
+// into SystemState for logging/display.
+enum BandwidthClass : uint8_t {
+    BW_NARROW = 0,
+    BW_MEDIUM = 1,
+    BW_WIDE   = 2
+};
+
 // Shared state protected by stateMutex — copy under lock, process outside lock
 static const uint8_t DET_SOURCE_WIFI = 2;
 
@@ -57,6 +70,11 @@ struct SystemState {
     // should show "WiFi scan..." text fallback in that case.
     uint8_t         wifiChannelCount[13];
     unsigned long   wifiChannelSnapshotMs;
+    // Phase I: bandwidth classification of the strongest sub-GHz peak, updated
+    // by detectionEngineIngestSweep(). peakAdjBins is the raw run length;
+    // peakBwClass is the bucketed BandwidthClass. Zero when no peak survived.
+    uint8_t         peakBwClass;
+    uint8_t         peakAdjBins;
 };
 
 // Detection event sources

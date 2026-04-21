@@ -95,6 +95,10 @@ struct DetectionCandidate {
     EvidenceTerm         bandEnergy;
     EvidenceTerm         cad24;
     EvidenceTerm         proto24;
+    // Phase I: wide-band (BW_WIDE) corroboration — attached only when an
+    // RSSI peak with adjacentBinCount >= BW_WIDE_BIN_THRESHOLD overlaps this
+    // candidate's anchor. Never seeds a new candidate; same role as proto24.
+    EvidenceTerm         bwWide;
     EvidenceTerm         rid;
     EvidenceTerm         gnss;
 };
