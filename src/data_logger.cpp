@@ -106,16 +106,20 @@ void loggerWrite(const SystemState& state, uint32_t sweepNum) {
                        state.integrity.cnoStdDev);
     }
 
-    // JSONL field test log — one JSON object per line
+    // JSONL field test log — one JSON object per line. peak_bw and peak_bins
+    // (Phase I) describe the bandwidth class of the strongest sub-GHz peak:
+    // 0=NARROW, 1=MEDIUM, 2=WIDE (see BandwidthClass in detection_types.h).
     if (jsonlFile) {
         jsonlFile.printf("{\"t\":%lu,\"c\":%u,\"threat\":%d,\"score\":%d,"
                          "\"div\":%d,\"conf\":%d,\"taps\":%d,"
                          "\"peak_mhz\":%.1f,\"peak_dbm\":%.1f,"
+                         "\"peak_bw\":%u,\"peak_bins\":%u,"
                          "\"lat\":%.7f,\"lon\":%.7f,\"fix\":%d,\"sv\":%d,"
                          "\"jam\":%d,\"spoof\":%d,\"cno_sd\":%.1f}\n",
                          ts, sweepNum, (int)state.threatLevel, state.confidenceScore,
                          state.cadDiversity, state.cadConfirmed, state.cadTotalTaps,
                          state.spectrum.peakFreq, state.spectrum.peakRSSI,
+                         (unsigned)state.peakBwClass, (unsigned)state.peakAdjBins,
                          state.gps.latDeg7 / 1e7, state.gps.lonDeg7 / 1e7,
                          state.gps.fixType, state.gps.numSV,
                          state.gps.jamInd, state.gps.spoofDetState,

@@ -268,6 +268,22 @@ static const unsigned long REMINDER_INTERVAL = 30000;  // 30 seconds
 // to ADVISORY+WARNING (40+) on fast-FHSS signals like ELRS 200Hz.
 #define FAST_SCORE_FHSS_CLUSTER     15
 
+// ── Phase I: Bandwidth discrimination (DJI OcuSync detection) ───────────────
+// Applied to the per-peak adjacent-bin count returned by
+// countElevatedAdjacentBins(). Bin spacing is 200 kHz on the sub-GHz sweep.
+//   count >= BW_WIDE_BIN_THRESHOLD   → BW_WIDE   (DJI OcuSync OFDM, 10+ bins)
+//   count >= BW_MEDIUM_BIN_THRESHOLD → BW_MEDIUM (unknown/other, 4-9 bins)
+//   otherwise                        → BW_NARROW (ELRS/Crossfire/FrSky, 1-3 bins)
+#define BW_WIDE_BIN_THRESHOLD       10
+#define BW_MEDIUM_BIN_THRESHOLD      4
+
+// Wide-band candidate evidence — attached only as a confirmer, never seeds
+// a new candidate. Weight matches WEIGHT_CONFIRM_BAND_ENERGY since both are
+// "elevated RSSI over a wide span" signals of different flavors. TTL matches
+// the sweep-derived evidence lifetime.
+static const int WEIGHT_CONFIRM_BW_WIDE = 10;
+#define TTL_BW_WIDE_MS              4500
+
 // ── Phase H: mode accessor API ───────────────────────────────────────
 // Defined in main.cpp. Always access via these wrappers — they take
 // stateMutex internally so cross-core reads stay consistent.

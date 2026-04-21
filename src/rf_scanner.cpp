@@ -42,6 +42,24 @@ float getAdaptiveNoiseFloor() {
     return adaptiveNoiseFloor;
 }
 
+// Phase I: bandwidth discrimination primitive — spec in rf_scanner.h.
+// Edge cases verified:
+//   - peakIdx < 0 or >= numBins  → 0 (defensive; caller should avoid this)
+//   - rssi[peakIdx] <= threshold → 0 (no elevated peak to count around)
+//   - peakIdx == 0               → left loop bails immediately, right loop walks
+//   - peakIdx == numBins - 1     → right loop bails immediately, left loop walks
+//   - all bins elevated          → returns numBins
+//   - no adjacent bins elevated  → returns 1 (just the peak)
+int countElevatedAdjacentBins(const float* rssi, int numBins,
+                              int peakIdx, float threshold) {
+    if (peakIdx < 0 || peakIdx >= numBins) return 0;
+    if (rssi[peakIdx] <= threshold) return 0;
+    int count = 1;
+    for (int i = peakIdx - 1; i >= 0          && rssi[i] > threshold; i--) count++;
+    for (int i = peakIdx + 1; i <  numBins    && rssi[i] > threshold; i++) count++;
+    return count;
+}
+
 // 10 test frequencies spread across 860-928 MHz for boot-time antenna check
 static const float ANTENNA_TEST_FREQS[] = {
     860.0f, 867.5f, 875.0f, 882.5f, 890.0f,

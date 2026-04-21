@@ -76,4 +76,14 @@ void scannerPrintSummary(const ScanResult& result);
 void computeAdaptiveNoiseFloor(const ScanResult& result);
 float getAdaptiveNoiseFloor();
 
+// Phase I: Count consecutive bins centered on peakIdx with rssi > threshold.
+// Walks outward in both directions until a bin drops at-or-below threshold or
+// the array edge is hit, then returns the total run length (inclusive of the
+// peak). O(n) worst case, zero allocation. Used by the bandwidth classifier
+// to discriminate narrow control links (ELRS/Crossfire, 1-3 bins) from wide
+// OFDM (DJI OcuSync, 10+ bins). Returns 0 if peakIdx is out of range or the
+// peak bin itself is not above threshold.
+int countElevatedAdjacentBins(const float* rssi, int numBins,
+                              int peakIdx, float threshold);
+
 #endif // RF_SCANNER_H
