@@ -250,6 +250,25 @@ static const unsigned long REMINDER_INTERVAL = 30000;  // 30 seconds
 #define POLICY_CRITICAL_CONFIRM     30
 #define POLICY_RID_ONLY_ADVISORY    30      // RID confirm score for ADVISORY without RF candidate
 
+// Sprint 4 (v3 Tier 1) — CC §3.4.4 / brief §Sprint 4. Decoded ASTM F3411
+// RID with a valid drone position escalates to CRITICAL when the drone
+// is within this distance (meters) of the sentry GPS. Without a sentry
+// 3D fix or without drone position, decoded RID stays capped at WARNING.
+#define RID_PROXIMITY_THRESHOLD_M   500.0f
+
+// Sprint 4 mock-RID test harness. When 1, after warmup completes the main
+// loop fires three synthetic DecodedRID events through the same code path
+// the wifi_scanner uses on a real decode — exercising the proximity
+// escalation block without needing an external RID transmitter. Default 0
+// (production firmware ships without this — JJ y1 doesn't decode in
+// SENTRY's opendroneid stack so we cannot validate Part B with hardware
+// alone). Override at the build line with `-DENABLE_RID_MOCK=1`. See
+// docs/SPRINT_4_NOTES.md for the test cases and how to enable for
+// validation.
+#ifndef ENABLE_RID_MOCK
+#define ENABLE_RID_MOCK             0
+#endif
+
 // --- Fast score component caps ---
 #define FAST_SCORE_CAD_PER_TAP      10
 #define FAST_SCORE_CAD_CAP          40

@@ -904,6 +904,17 @@ void loop() {
         statsPrinted = true;
     }
 
+#if ENABLE_RID_MOCK
+    // Sprint 4 mock-RID one-shot: 90 seconds after boot the warmup is
+    // complete, the candidate engine has stabilised, and the WiFi/BLE
+    // scanners are running. Fire the synthetic suite once.
+    static bool ridMockFired = false;
+    if (!ridMockFired && millis() > 90000) {
+        wifiScannerRunRidMockSuite();
+        ridMockFired = true;
+    }
+#endif
+
     // Periodic heap monitoring — detect memory leaks over time
     static unsigned long lastHeapPrint = 0;
     if (millis() - lastHeapPrint > 300000) {

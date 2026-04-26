@@ -32,4 +32,14 @@ void wifiScanTask(void* param);
 // WiFi task after a COVERT -> non-COVERT transition.
 extern TaskHandle_t hWiFiTask;
 
+#include "sentry_config.h"
+#if ENABLE_RID_MOCK
+// Sprint 4 mock-RID test harness. Synthesizes three DecodedRID events
+// through the same code path the wifi_scanner uses on a real decode —
+// exercises the proximity escalation block without needing an external
+// RID transmitter. Called once after warmup from main.cpp loop().
+// Default-off via sentry_config.h ENABLE_RID_MOCK.
+void wifiScannerRunRidMockSuite();
+#endif
+
 #endif // WIFI_SCANNER_H
