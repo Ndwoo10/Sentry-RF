@@ -14,6 +14,59 @@ extern Module radioMod;
 // graduated as ambient.
 extern bool detectionEngineHasActiveCandidateNearFreq(float freqMHz, float toleranceMHz);
 
+// Sprint 6 Part A (v3 Tier 1) — adaptive FSK tap-investigation dwell.
+// Replaces the fixed FSK_DWELL_US (= 2.5 ms) wait at the existing-tap
+// re-check sites. Polls RSSI in 1 ms increments on the currently-tuned
+// frequency; bails on SPRINT6_TAP_INVESTIGATE_SILENCE_MS of contiguous
+// below-threshold reads, hard cap at SPRINT6_TAP_INVESTIGATE_CAP_MS.
+//
+// Templated on the radio type so the LR1121 (LR1121_RSSI subclass with
+// getInstantRSSI()) and SX1262 (getRSSI(bool)) APIs can both be served
+// without runtime overhead — each call site instantiates with its own
+// local `radio` reference.
+//
+// Returns dwell duration in ms; sets *hadActivity true if any sample
+// crossed the threshold; sets *bailReason to "silence" or "cap".
+//
+// Use only on EXISTING active taps (the brief's "investigate-status"
+// trigger). New-channel scans still use the fixed 2.5 ms dwell so the
+// per-cycle baseline cost stays bounded.
+template <typename RadioT>
+static int adaptiveFskTapDwell(RadioT& radio,
+                               float threshold,
+                               bool* hadActivity,
+                               const char** bailReason) {
+    *hadActivity = false;
+    int elapsedMs = 0;
+    int silenceMs = 0;
+    while (elapsedMs < SPRINT6_TAP_INVESTIGATE_CAP_MS) {
+        delayMicroseconds(1000);
+        elapsedMs++;
+        float r;
+#ifdef BOARD_T3S3_LR1121
+        r = radio.getInstantRSSI();
+#else
+        r = radio.getRSSI(false);
+#endif
+        if (r > threshold) {
+            *hadActivity = true;
+            silenceMs = 0;
+        } else {
+            silenceMs++;
+        }
+        if (silenceMs >= SPRINT6_TAP_INVESTIGATE_SILENCE_MS) {
+            *bailReason = "silence";
+            return elapsedMs;
+        }
+    }
+    *bailReason = "cap";
+    return elapsedMs;
+}
+
+// Sample-every-N counter for the [TAP-INV] diagnostic log so the trace
+// doesn't drown out higher-signal lines on busy benches.
+static uint32_t s_tapInvLogCounter = 0;
+
 // Sprint 2 (v3 Tier 1) reuses the Sprint 1 fwd-decl above as a per-frequency
 // gate inside the post-warmup auto-learn loop — see detection_engine.h.
 
@@ -1356,18 +1409,45 @@ CadFskResult cadFskScan(LR1121_RSSI& radio, uint32_t cycleNum, const ScanResult*
             radio.setFrequencyDeviation(25.0);
             radio.setRxBandwidth(117.3);
 
-            // Re-check existing FSK taps
+            // Re-check existing FSK taps — Sprint 6 Part A: adaptive dwell
+            // gated on strong-pending (consecutiveHits >= TAP_CONFIRM_HITS-1).
+            // Weak-pending taps stay at fixed FSK_DWELL_US so the per-cycle
+            // baseline cost matches Sprint 5b (the unrestricted variant
+            // delayed A04's first WARNING by ~11 s on bench validation).
             for (int i = 0; i < MAX_TAPS; i++) {
-                if (!subGHzTracker.taps[i].active || !subGHzTracker.taps[i].isFsk) continue;
-                radio.setFrequency(subGHzTracker.taps[i].frequency);
+                CadTap& tap = subGHzTracker.taps[i];
+                if (!tap.active || !tap.isFsk) continue;
+                radio.setFrequency(tap.frequency);
                 radio.startReceive();
-                delayMicroseconds(FSK_DWELL_US);
-                float r = radio.getInstantRSSI();
-                if (r > FSK_DETECT_THRESHOLD_DBM) tapHit(&subGHzTracker.taps[i]);
-                else tapMiss(&subGHzTracker.taps[i]);
+                const bool investigateStatus =
+                    (tap.consecutiveHits >= (uint8_t)(TAP_CONFIRM_HITS - 1));
+                bool hadActivity = false;
+                if (investigateStatus) {
+                    const char* bailReason = "cap";
+                    int dwellMs = adaptiveFskTapDwell(radio, FSK_DETECT_THRESHOLD_DBM,
+                                                      &hadActivity, &bailReason);
+#if ENABLE_ATTACH_TRACE
+                    if ((s_tapInvLogCounter++ % 10) == 0) {
+                        SERIAL_SAFE(Serial.printf(
+                            "[TAP-INV] freq=%.1fMHz sf=%u dwell_ms=%d bail=%s hits=%u\n",
+                            tap.frequency, (unsigned)tap.sf,
+                            dwellMs, bailReason, (unsigned)tap.consecutiveHits));
+                    }
+#else
+                    (void)dwellMs; (void)bailReason;
+#endif
+                } else {
+                    delayMicroseconds(FSK_DWELL_US);
+                    float r = radio.getInstantRSSI();
+                    hadActivity = (r > FSK_DETECT_THRESHOLD_DBM);
+                }
+                if (hadActivity) tapHit(&tap);
+                else             tapMiss(&tap);
             }
 
-            // Scan new Crossfire channels (rotating)
+            // Scan new Crossfire channels (rotating) — fixed FSK_DWELL_US
+            // dwell on new-channel probes (per Sprint 6 brief: investigation
+            // is for existing taps only).
             int stride = CRSF_CHANNELS / FSK_CH;
             if (stride < 1) stride = 1;
             int offset = rotFSK % stride;
@@ -1757,15 +1837,38 @@ CadFskResult cadFskScan(SX1262& radio, uint32_t cycleNum, const ScanResult* rssi
             radio.setFrequencyDeviation(25.0);
             radio.setRxBandwidth(117.3);
 
-            // Re-check existing FSK taps
+            // Re-check existing FSK taps — Sprint 6 Part A: adaptive dwell
+            // gated on strong-pending taps (see LR1121 path above for full
+            // rationale + bench-drift comparison).
             for (int i = 0; i < MAX_TAPS; i++) {
-                if (!subGHzTracker.taps[i].active || !subGHzTracker.taps[i].isFsk) continue;
-                radio.setFrequency(subGHzTracker.taps[i].frequency);
+                CadTap& tap = subGHzTracker.taps[i];
+                if (!tap.active || !tap.isFsk) continue;
+                radio.setFrequency(tap.frequency);
                 radio.startReceive();
-                delayMicroseconds(FSK_DWELL_US);
-                float r = radio.getRSSI(false);
-                if (r > FSK_DETECT_THRESHOLD_DBM) tapHit(&subGHzTracker.taps[i]);
-                else tapMiss(&subGHzTracker.taps[i]);
+                const bool investigateStatus =
+                    (tap.consecutiveHits >= (uint8_t)(TAP_CONFIRM_HITS - 1));
+                bool hadActivity = false;
+                if (investigateStatus) {
+                    const char* bailReason = "cap";
+                    int dwellMs = adaptiveFskTapDwell(radio, FSK_DETECT_THRESHOLD_DBM,
+                                                      &hadActivity, &bailReason);
+#if ENABLE_ATTACH_TRACE
+                    if ((s_tapInvLogCounter++ % 10) == 0) {
+                        SERIAL_SAFE(Serial.printf(
+                            "[TAP-INV] freq=%.1fMHz sf=%u dwell_ms=%d bail=%s hits=%u\n",
+                            tap.frequency, (unsigned)tap.sf,
+                            dwellMs, bailReason, (unsigned)tap.consecutiveHits));
+                    }
+#else
+                    (void)dwellMs; (void)bailReason;
+#endif
+                } else {
+                    delayMicroseconds(FSK_DWELL_US);
+                    float r = radio.getRSSI(false);
+                    hadActivity = (r > FSK_DETECT_THRESHOLD_DBM);
+                }
+                if (hadActivity) tapHit(&tap);
+                else             tapMiss(&tap);
             }
 
             // Scan new Crossfire channels (rotating)

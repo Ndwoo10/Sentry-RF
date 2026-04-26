@@ -287,6 +287,23 @@ static const unsigned long REMINDER_INTERVAL = 30000;  // 30 seconds
 #define ENABLE_ATTACH_TRACE         0
 #endif
 
+// ── Sprint 6 Part A (v3 Tier 1) — adaptive tap investigation ─────────────
+// When a CAD/FSK tap is one cycle away from confirmation (consecutiveHits
+// == TAP_CONFIRM_HITS - 1), the radio dwells adaptively on that channel
+// instead of using the fixed FSK_DWELL_US window. Polls RSSI in 1 ms
+// increments; bails out early on a silent run, hard caps at 650 ms.
+//
+// Rationale:
+// - 650 ms cap = ~130 ELRS 200 Hz hops; long enough to catch a returning
+//   drone packet without stalling the frequency synth across an entire
+//   sweep cycle.
+// - 5 ms silence bail-out lets transient noise/WiFi spillover release the
+//   radio fast for the next channel — most channels exit within 5-10 ms.
+// - Investigation triggers only on strong-pending taps so the per-cycle
+//   baseline cost stays bounded; new-channel scans stay at FSK_DWELL_US.
+#define SPRINT6_TAP_INVESTIGATE_CAP_MS      650
+#define SPRINT6_TAP_INVESTIGATE_SILENCE_MS  5
+
 // --- Fast score component caps ---
 #define FAST_SCORE_CAD_PER_TAP      10
 #define FAST_SCORE_CAD_CAP          40
