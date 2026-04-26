@@ -905,12 +905,14 @@ void loop() {
     }
 
 #if ENABLE_RID_MOCK
-    // Sprint 4 mock-RID one-shot: 90 seconds after boot the warmup is
-    // complete, the candidate engine has stabilised, and the WiFi/BLE
-    // scanners are running. Fire the synthetic suite once.
+    // Sprint 4 + 4.5 mock-RID one-shot: 90 seconds after boot the warmup
+    // is complete, the candidate engine has stabilised, and the WiFi/BLE
+    // scanners are running. Fire the WiFi synthetic suite, then the BLE
+    // synthetic suite (each ~10s of injected events with internal delays).
     static bool ridMockFired = false;
     if (!ridMockFired && millis() > 90000) {
         wifiScannerRunRidMockSuite();
+        bleScannerRunRidMockSuite();
         ridMockFired = true;
     }
 #endif

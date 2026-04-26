@@ -6,6 +6,7 @@
 #include "sentry_config.h"
 #include "data_logger.h"
 #include "alert_handler.h"   // Issue 8: alertQueueDropInc()
+#include "geo_utils.h"       // Sprint 4.5: shared ridDistanceMeters()
 #include <Arduino.h>
 #include <string.h>
 #include <NimBLEDevice.h>
@@ -255,6 +256,30 @@ void bleScanTask(void* param) {
         ev.timestamp = millis();
         snprintf(ev.description, sizeof(ev.description),
                  "BLE-RID %s", rid.uasID);
+
+        // Sprint 4.5 (v3 Tier 1) — BLE proximity escalation. Mirrors
+        // wifi_scanner.cpp's Part B block: decoded RID with a drone-
+        // position fix AND sentry's GPS in 3D fix AND drone <
+        // RID_PROXIMITY_THRESHOLD_M of sentry => CRITICAL. Without
+        // sentry GPS or without drone position, stays capped at
+        // WARNING (no distance reference).
+        if (haveSnap &&
+            snap.gps.fixType >= 3 &&
+            (rid.droneLat != 0.0f || rid.droneLon != 0.0f)) {
+            const float sentryLat = snap.gps.latDeg7 / 1.0e7f;
+            const float sentryLon = snap.gps.lonDeg7 / 1.0e7f;
+            const float distM = ridDistanceMeters(
+                sentryLat, sentryLon,
+                rid.droneLat, rid.droneLon);
+            if (distM < RID_PROXIMITY_THRESHOLD_M) {
+                ev.severity = THREAT_CRITICAL;
+                SERIAL_SAFE(Serial.printf(
+                    "[RID-PROX] decoded BLE-RID %.0fm < %.0fm threshold "
+                    "-> CRITICAL\n",
+                    distM, RID_PROXIMITY_THRESHOLD_M));
+            }
+        }
+
         if (xQueueSend(detectionQueue, &ev, pdMS_TO_TICKS(5)) != pdTRUE) {
             alertQueueDropInc();
         }
@@ -264,11 +289,95 @@ void bleScanTask(void* param) {
     }
 }
 
+#if ENABLE_RID_MOCK
+
+// Sprint 4.5 mock-RID test harness for the BLE proximity path. Mirrors
+// wifi_scanner.cpp's wifiScannerRunRidMockSuite(); each case reproduces
+// the BLE decoded-path logic exactly so any bug in that path surfaces
+// here too.
+static void mockBleRidInject(const DecodedRID& rid, const GpsData& gps,
+                             const char* caseLabel) {
+    DetectionEvent ev = {};
+    ev.source    = DET_SOURCE_WIFI;     // BLE-RID dispatches as WIFI source
+    ev.severity  = THREAT_WARNING;
+    ev.frequency = 2440.0f;
+    ev.rssi      = -55.0f;
+    ev.timestamp = millis();
+    snprintf(ev.description, sizeof(ev.description),
+             "MOCK-BLE-RID %s drone=%.6f,%.6f", caseLabel,
+             rid.droneLat, rid.droneLon);
+
+    if (gps.fixType >= 3 &&
+        (rid.droneLat != 0.0f || rid.droneLon != 0.0f)) {
+        const float sentryLat = gps.latDeg7 / 1.0e7f;
+        const float sentryLon = gps.lonDeg7 / 1.0e7f;
+        const float distM = ridDistanceMeters(
+            sentryLat, sentryLon, rid.droneLat, rid.droneLon);
+        if (distM < RID_PROXIMITY_THRESHOLD_M) {
+            ev.severity = THREAT_CRITICAL;
+            SERIAL_SAFE(Serial.printf(
+                "[RID-PROX] decoded BLE-RID %.0fm < %.0fm threshold -> CRITICAL\n",
+                distM, RID_PROXIMITY_THRESHOLD_M));
+        } else {
+            SERIAL_SAFE(Serial.printf(
+                "[RID-PROX] decoded BLE-RID %.0fm >= %.0fm threshold (no escalation)\n",
+                distM, RID_PROXIMITY_THRESHOLD_M));
+        }
+    } else {
+        SERIAL_SAFE(Serial.printf(
+            "[RID-PROX] BLE no sentry 3D-fix or no drone position (no escalation)\n"));
+    }
+
+    SERIAL_SAFE(Serial.printf("[MOCK-RID-BLE] %s severity=%d\n",
+                              caseLabel, (int)ev.severity));
+    if (xQueueSend(detectionQueue, &ev, pdMS_TO_TICKS(5)) != pdTRUE) {
+        alertQueueDropInc();
+    }
+}
+
+void bleScannerRunRidMockSuite() {
+    SERIAL_SAFE(Serial.printf("[MOCK-RID-BLE] === Sprint 4.5 BLE mock suite start ===\n"));
+
+    GpsData gps = {};
+    gps.latDeg7  =  370000000;
+    gps.lonDeg7  = -1220000000;
+    gps.fixType  = 3;
+    gps.valid    = true;
+
+    DecodedRID rid = {};
+    rid.valid = true;
+    snprintf(rid.uasID, sizeof(rid.uasID), "MOCK-BLE-DRONE-001");
+    rid.droneAltM = 50.0f;
+
+    rid.droneLat = 37.0010f;             // +0.001° ≈ 111 m
+    rid.droneLon = -122.0000f;
+    mockBleRidInject(rid, gps, "ble-case-a within-prox 3Dfix");
+    vTaskDelay(pdMS_TO_TICKS(5000));
+
+    rid.droneLat = 37.0100f;             // +0.01° ≈ 1110 m
+    mockBleRidInject(rid, gps, "ble-case-b outside-prox 3Dfix");
+    vTaskDelay(pdMS_TO_TICKS(5000));
+
+    rid.droneLat = 37.0010f;
+    gps.fixType  = 0;
+    mockBleRidInject(rid, gps, "ble-case-c within-prox no-fix");
+
+    SERIAL_SAFE(Serial.printf("[MOCK-RID-BLE] === Sprint 4.5 BLE mock suite complete ===\n"));
+}
+
+#endif  // ENABLE_RID_MOCK
+
 #else // !HAS_BLE_RID — provide stubs so main.cpp links without guards.
 
 void bleScannerInit() {}
 void bleScannerStart() {}
 void bleScannerStop() {}
 void bleScanTask(void*) { vTaskDelete(nullptr); }
+
+#if ENABLE_RID_MOCK
+// No-op stub on builds without HAS_BLE_RID so main.cpp's mock trigger
+// links cleanly (e.g., heltec_v3 board).
+void bleScannerRunRidMockSuite() {}
+#endif
 
 #endif // HAS_BLE_RID

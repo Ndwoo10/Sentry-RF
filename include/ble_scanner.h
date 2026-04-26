@@ -38,4 +38,12 @@ extern TaskHandle_t hBLETask;
 
 #endif // HAS_BLE_RID
 
+#include "sentry_config.h"
+#if ENABLE_RID_MOCK
+// Sprint 4.5 BLE mock-RID test harness — see ble_scanner.cpp. On boards
+// without HAS_BLE_RID this function is a no-op stub so main.cpp's
+// one-shot trigger links cleanly.
+void bleScannerRunRidMockSuite();
+#endif
+
 #endif // BLE_SCANNER_H

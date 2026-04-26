@@ -4,10 +4,10 @@
 #include "data_logger.h"   // Phase L: emitZmqJson on decoded RID
 #include "alert_handler.h" // Issue 8: alertQueueDropInc()
 #include "cad_scanner.h"   // Issue 1: warmup corroboration markers
+#include "geo_utils.h"     // Sprint 4.5: shared ridDistanceMeters()
 #include <Arduino.h>
 #include <esp_wifi.h>
 #include <string.h>
-#include <math.h>          // Sprint 4: cosf, sqrtf for haversine
 
 // Phase J: ASTM F3411 Remote ID payload decode via opendroneid-core-c.
 // opendroneid.h is a C header with its own extern "C" wrapping. We only call
@@ -202,19 +202,9 @@ static const char* identifyDroneMAC(const uint8_t* mac) {
 // *data* bytes (after element_id + length). Caller uses this to feed the
 // message pack (minus oui[3] + oui_type[1] + message_counter[1]) to
 // odid_message_process_pack(). Pass nullptrs if only presence is needed.
-// Sprint 4 (v3 Tier 1) — equirectangular projection for distances < a few km.
-// At RID_PROXIMITY_THRESHOLD_M = 500 m the great-circle vs flat error is
-// well below 1 m, far below the typical ASTM F3411 position uncertainty.
-// Returns meters between two (lat, lon) points expressed in degrees.
-static float ridDistanceMeters(float lat1Deg, float lon1Deg,
-                               float lat2Deg, float lon2Deg) {
-    constexpr float DEG_TO_RAD_F = 0.017453293f;   // pi/180
-    constexpr float METERS_PER_DEG_LAT = 111320.0f;
-    const float dLat = (lat2Deg - lat1Deg) * METERS_PER_DEG_LAT;
-    const float dLon = (lon2Deg - lon1Deg) *
-                       METERS_PER_DEG_LAT * cosf(lat1Deg * DEG_TO_RAD_F);
-    return sqrtf(dLat * dLat + dLon * dLon);
-}
+// Sprint 4.5 (v3 Tier 1): ridDistanceMeters() promoted to geo_utils.{h,cpp}
+// so ble_scanner can call the same arithmetic for its proximity escalation.
+// See geo_utils.h for accuracy bounds.
 
 static bool findRemoteIdIE(const CapturedFrame& frame,
                            uint16_t* outDataOffset, uint16_t* outDataLen) {
