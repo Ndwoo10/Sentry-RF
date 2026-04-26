@@ -287,7 +287,7 @@ static const unsigned long REMINDER_INTERVAL = 30000;  // 30 seconds
 #define ENABLE_ATTACH_TRACE         0
 #endif
 
-// ── Sprint 6 Part A (v3 Tier 1) — adaptive tap investigation ─────────────
+// ── Sprint 6 (v3 Tier 1) — adaptive tap investigation ────────────────────
 // When a CAD/FSK tap is one cycle away from confirmation (consecutiveHits
 // == TAP_CONFIRM_HITS - 1), the radio dwells adaptively on that channel
 // instead of using the fixed FSK_DWELL_US window. Polls RSSI in 1 ms
@@ -303,6 +303,41 @@ static const unsigned long REMINDER_INTERVAL = 30000;  // 30 seconds
 //   baseline cost stays bounded; new-channel scans stay at FSK_DWELL_US.
 #define SPRINT6_TAP_INVESTIGATE_CAP_MS      650
 #define SPRINT6_TAP_INVESTIGATE_SILENCE_MS  5
+
+// ── Sprint 6 Part B — WiFi-channel learn-and-skip ────────────────────────
+// Per-channel observation thresholds. A channel is "unproductive" when:
+//   (decoded RID count == 0) AND
+//   (undecoded OUI count >= SPRINT6_UNPRODUCTIVE_OUI_MIN_COUNT) AND
+//   (totalObservationsMs >= SPRINT6_CHANNEL_OBSERVATION_MIN_MS)
+// — i.e., the channel produced consumer WiFi OUI noise but never a real
+// drone RID after enough observation time. Set its skipUntilMs based on
+// the active environment mode's TTL.
+#define SPRINT6_CHANNEL_OBSERVATION_MIN_MS  60000   // 1 min observation
+#define SPRINT6_UNPRODUCTIVE_OUI_MIN_COUNT  20      // OUI hits before skip
+
+// Environment-mode TTL constants (ND wants these now so Sprint 7 only
+// adds the UI to select among them at runtime).
+#define SPRINT6_ENV_MODE_URBAN     0
+#define SPRINT6_ENV_MODE_SUBURBAN  1   // default for Sprint 6
+#define SPRINT6_ENV_MODE_RURAL     2
+
+#define SPRINT6_SKIP_TTL_URBAN_MS    300000   // 5 min  (densest, longest skip)
+#define SPRINT6_SKIP_TTL_SUBURBAN_MS 180000   // 3 min  (default)
+#define SPRINT6_SKIP_TTL_RURAL_MS     60000   // 1 min  (sparsest, shortest skip)
+
+// Sprint 6 uses the Suburban default. Sprint 7 will replace this with a
+// runtime-mutable variable populated from NVS-backed environment-mode UI
+// selection. Use SPRINT6_CURRENT_ENV_MODE everywhere the TTL is needed;
+// Sprint 7 just changes that one symbol from a #define to a variable.
+#define SPRINT6_CURRENT_ENV_MODE     SPRINT6_SKIP_TTL_SUBURBAN_MS
+
+// GPS-aware skip invalidation. BOTH triggers invalidate all skip entries:
+// distance from anchor > 100 m, or sustained velocity > 5 km/h for 30 s.
+// No-fix (gps.fixType < 3) effectively disables the skip list — fail
+// closed; matches the proximity-CRITICAL rule from Sprint 4.
+#define SPRINT6_SKIP_INVALIDATE_DISTANCE_M           100.0f
+#define SPRINT6_SKIP_INVALIDATE_VELOCITY_KMH         5.0f
+#define SPRINT6_SKIP_INVALIDATE_VELOCITY_DURATION_MS 30000
 
 // --- Fast score component caps ---
 #define FAST_SCORE_CAD_PER_TAP      10

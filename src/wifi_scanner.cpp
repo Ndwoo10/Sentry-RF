@@ -372,6 +372,156 @@ static bool decodeNanActionRID(const CapturedFrame& frame, DecodedRID& out) {
     return out.valid;
 }
 
+// ── Sprint 6 Part B (v3 Tier 1) — WiFi-channel learn-and-skip ──────────────
+// Per-channel observation tracking. The scan task hops through channels
+// 1-13 every HOP_INTERVAL_MS. After enough observation time, channels
+// that have produced consumer-WiFi noise (undecoded OUI matches) but
+// no real RID get parked on a TTL skip list. GPS-aware invalidation
+// clears the list when the sentry moves > SPRINT6_SKIP_INVALIDATE_DISTANCE_M
+// from anchor or sustains > SPRINT6_SKIP_INVALIDATE_VELOCITY_KMH for
+// SPRINT6_SKIP_INVALIDATE_VELOCITY_DURATION_MS. No-fix (gps.fixType < 3)
+// disables skip — fail closed, matching Sprint 4 proximity-CRITICAL.
+struct WiFiChannelState {
+    uint32_t observationStartMs;     // when current observation window opened
+    uint32_t totalObservationsMs;    // cumulative observation time on this ch
+    uint32_t undecodedOuiCount;
+    uint32_t decodedRidCount;
+    uint32_t lastDecodedRidMs;
+    uint32_t skipUntilMs;            // 0 if not skipping
+};
+
+static WiFiChannelState s_chanState[13] = {};
+
+// Skip-anchor GPS state (set when first skip entry is created; reset on
+// invalidation). skipAnchorValid=false means "no skip yet, don't compare."
+static int32_t  s_skipAnchorLatDeg7 = 0;
+static int32_t  s_skipAnchorLonDeg7 = 0;
+static bool     s_skipAnchorValid   = false;
+// Velocity excursion start time. 0 == not currently above threshold.
+static uint32_t s_velocityExceedSinceMs = 0;
+// Last time we ran the GPS-aware invalidation check (rate-limit).
+static uint32_t s_lastGpsCheckMs = 0;
+
+static bool wifiSkipChannel(uint8_t channel, uint32_t nowMs) {
+    if (channel < 1 || channel > 13) return false;
+    auto& cs = s_chanState[channel - 1];
+    if (cs.skipUntilMs == 0) return false;
+    if ((int32_t)(nowMs - cs.skipUntilMs) >= 0) {
+        cs.skipUntilMs = 0;  // expired
+        cs.undecodedOuiCount = 0;
+        cs.totalObservationsMs = 0;
+        return false;
+    }
+    return true;
+}
+
+static void wifiSkipInvalidateAll(const char* reason) {
+    int n = 0;
+    for (int i = 0; i < 13; i++) {
+        if (s_chanState[i].skipUntilMs != 0) n++;
+        s_chanState[i].skipUntilMs = 0;
+        s_chanState[i].observationStartMs = 0;
+        s_chanState[i].totalObservationsMs = 0;
+        s_chanState[i].undecodedOuiCount = 0;
+        s_chanState[i].decodedRidCount = 0;
+    }
+    SERIAL_SAFE(Serial.printf(
+        "[SKIP-INVALIDATE] reason=%s entries_cleared=%d\n", reason, n));
+}
+
+static void wifiObserveChannel(uint8_t channel, uint32_t durationMs) {
+    if (channel < 1 || channel > 13) return;
+    auto& cs = s_chanState[channel - 1];
+    cs.totalObservationsMs += durationMs;
+    if (cs.skipUntilMs != 0) return;  // already skipping; don't re-evaluate
+    if (cs.totalObservationsMs >= SPRINT6_CHANNEL_OBSERVATION_MIN_MS &&
+        cs.decodedRidCount == 0 &&
+        cs.undecodedOuiCount >= SPRINT6_UNPRODUCTIVE_OUI_MIN_COUNT) {
+        const uint32_t nowMs = millis();
+        cs.skipUntilMs = nowMs + SPRINT6_CURRENT_ENV_MODE;
+        SERIAL_SAFE(Serial.printf(
+            "[SKIP-LEARN] ch=%u undecoded=%u decoded=%u obs_ms=%u -> skip until t+%u ms\n",
+            (unsigned)channel,
+            (unsigned)cs.undecodedOuiCount,
+            (unsigned)cs.decodedRidCount,
+            (unsigned)cs.totalObservationsMs,
+            (unsigned)SPRINT6_CURRENT_ENV_MODE));
+        // Establish the skip-anchor on the first skip entry, if not yet set.
+        if (!s_skipAnchorValid) {
+            if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(5)) == pdTRUE) {
+                s_skipAnchorLatDeg7 = systemState.gps.latDeg7;
+                s_skipAnchorLonDeg7 = systemState.gps.lonDeg7;
+                s_skipAnchorValid   = (systemState.gps.fixType >= 3);
+                xSemaphoreGive(stateMutex);
+            }
+        }
+    }
+}
+
+static void wifiNoteDecodedRid(uint8_t channel) {
+    if (channel < 1 || channel > 13) return;
+    s_chanState[channel - 1].decodedRidCount++;
+    s_chanState[channel - 1].lastDecodedRidMs = millis();
+}
+
+static void wifiNoteUndecodedOui(uint8_t channel) {
+    if (channel < 1 || channel > 13) return;
+    s_chanState[channel - 1].undecodedOuiCount++;
+}
+
+static void wifiSkipGpsCheck() {
+    SystemState snap;
+    if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(5)) != pdTRUE) return;
+    snap = systemState;
+    xSemaphoreGive(stateMutex);
+
+    // No-fix safe: clear anchor + skip list; per brief, skip list is
+    // effectively disabled when GPS isn't locked.
+    if (snap.gps.fixType < 3) {
+        if (s_skipAnchorValid) {
+            wifiSkipInvalidateAll("noFix");
+            s_skipAnchorValid = false;
+        }
+        s_velocityExceedSinceMs = 0;
+        return;
+    }
+
+    // Distance trigger
+    if (s_skipAnchorValid) {
+        const float anchorLat = s_skipAnchorLatDeg7 / 1.0e7f;
+        const float anchorLon = s_skipAnchorLonDeg7 / 1.0e7f;
+        const float curLat    = snap.gps.latDeg7 / 1.0e7f;
+        const float curLon    = snap.gps.lonDeg7 / 1.0e7f;
+        const float distM = ridDistanceMeters(anchorLat, anchorLon,
+                                              curLat, curLon);
+        if (distM > SPRINT6_SKIP_INVALIDATE_DISTANCE_M) {
+            wifiSkipInvalidateAll("distance");
+            s_skipAnchorLatDeg7 = snap.gps.latDeg7;
+            s_skipAnchorLonDeg7 = snap.gps.lonDeg7;
+            return;
+        }
+    }
+
+    // Velocity trigger — gSpeedMmS in mm/s; convert to km/h.
+    const float kmh = (snap.gps.gSpeedMmS > 0)
+        ? (snap.gps.gSpeedMmS * 0.0036f)
+        : 0.0f;
+    const uint32_t nowMs = millis();
+    if (kmh > SPRINT6_SKIP_INVALIDATE_VELOCITY_KMH) {
+        if (s_velocityExceedSinceMs == 0) s_velocityExceedSinceMs = nowMs;
+        if ((nowMs - s_velocityExceedSinceMs) >=
+            SPRINT6_SKIP_INVALIDATE_VELOCITY_DURATION_MS) {
+            wifiSkipInvalidateAll("velocity");
+            s_velocityExceedSinceMs = 0;
+            // Reset anchor on velocity-driven invalidation too.
+            s_skipAnchorLatDeg7 = snap.gps.latDeg7;
+            s_skipAnchorLonDeg7 = snap.gps.lonDeg7;
+        }
+    } else {
+        s_velocityExceedSinceMs = 0;
+    }
+}
+
 // ── WiFi scan task ──────────────────────────────────────────────────────────
 
 void wifiScanTask(void* param) {
@@ -403,11 +553,41 @@ void wifiScanTask(void* param) {
             continue;
         }
 
-        // Channel hop every 100ms across channels 1-13
+        // Channel hop every 100ms across channels 1-13. Sprint 6 Part B
+        // skips channels parked on the unproductive list (only when GPS
+        // is in 3D fix and the skip list is valid).
         if (millis() - lastHopMs > HOP_INTERVAL_MS) {
-            currentChannel = (currentChannel % 13) + 1;
+            const uint32_t nowMs = millis();
+            // Accumulate observation time on the channel we're leaving.
+            wifiObserveChannel(currentChannel, nowMs - lastHopMs);
+
+            // Pick next channel; advance past skipped ones up to a bounded
+            // search depth (13 attempts caps the worst case where all
+            // channels are simultaneously skipped — fail back to the
+            // simple +1 advance).
+            for (int attempts = 0; attempts < 13; attempts++) {
+                currentChannel = (currentChannel % 13) + 1;
+                if (!wifiSkipChannel(currentChannel, nowMs)) break;
+#if ENABLE_ATTACH_TRACE
+                static uint32_t s_skipExecLogCounter = 0;
+                if ((s_skipExecLogCounter++ % 10) == 0) {
+                    const uint32_t remaining =
+                        s_chanState[currentChannel - 1].skipUntilMs - nowMs;
+                    SERIAL_SAFE(Serial.printf(
+                        "[SKIP-EXEC] ch=%u skipped (%u ms remaining)\n",
+                        (unsigned)currentChannel, (unsigned)remaining));
+                }
+#endif
+            }
             esp_wifi_set_channel(currentChannel, WIFI_SECOND_CHAN_NONE);
-            lastHopMs = millis();
+            lastHopMs = nowMs;
+        }
+
+        // GPS-aware skip invalidation check (rate-limited to once / 5 s
+        // — GPS PVT cadence is 1 Hz at default, no need to check faster).
+        if (millis() - s_lastGpsCheckMs > 5000) {
+            wifiSkipGpsCheck();
+            s_lastGpsCheckMs = millis();
         }
 
         // Snapshot per-channel frame counts into SystemState once per second
@@ -501,6 +681,7 @@ void wifiScanTask(void* param) {
                     bool haveSnap = false;
                     if (ridValid) {
                         event.severity = THREAT_WARNING;
+                        wifiNoteDecodedRid(frame.channel);  // Sprint 6 Part B
 
                         // Issue 1: a valid RID during warmup proves a real
                         // drone is present — blanket-disqualify all pending
@@ -575,6 +756,7 @@ void wifiScanTask(void* param) {
                                  "RID beacon undecoded OUI:%02X:%02X:%02X",
                                  REMOTE_ID_OUI[0], REMOTE_ID_OUI[1], REMOTE_ID_OUI[2]);
                         skipDispatch = true;
+                        wifiNoteUndecodedOui(frame.channel);  // Sprint 6 Part B
                     }
                 } else {
                     snprintf(event.description, sizeof(event.description),

@@ -11,6 +11,10 @@ struct GpsData {
     int32_t  latDeg7;        // latitude in degrees * 1e-7
     int32_t  lonDeg7;        // longitude in degrees * 1e-7
     int32_t  altMM;          // altitude in mm above MSL
+    int32_t  gSpeedMmS;      // Sprint 6 Part B: ground speed in mm/s
+                             // (from u-blox NAV-PVT). Used by the WiFi
+                             // channel-skip GPS-aware invalidator. Negative
+                             // values shouldn't appear; treat as 0.
     uint8_t  fixType;        // 0=none, 2=2D, 3=3D
     uint8_t  numSV;          // satellites used in solution
     uint16_t pDOP;           // position DOP * 100

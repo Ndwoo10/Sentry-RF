@@ -227,6 +227,7 @@ void gpsUpdate(GpsData& data) {
     data.latDeg7 = gps.getLatitude();
     data.lonDeg7 = gps.getLongitude();
     data.altMM   = gps.getAltitudeMSL();
+    data.gSpeedMmS = gps.getGroundSpeed();   // Sprint 6 Part B
     data.pDOP    = gps.getPDOP();
     data.hAccMM  = gps.getHorizontalAccEst();
     data.vAccMM  = gps.getVerticalAccEst();
