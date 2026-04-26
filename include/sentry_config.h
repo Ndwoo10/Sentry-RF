@@ -269,6 +269,18 @@ static const unsigned long REMINDER_INTERVAL = 30000;  // 30 seconds
 #define ENABLE_RID_MOCK             0
 #endif
 
+// Sprint 5a (v3 Tier 1) — diagnostic trace for the non-ambient provenance
+// bit on cadConfirmed/fskConfirmed evidence. When 1, every cadConfirmed
+// or fskConfirmed evidence refresh emits a `[CAD-PROV]` log line with
+// the candidate's anchor freq/SF, the nonAmbient flag, and the resulting
+// fast score. Default 0 (production firmware ships clean). Override with
+// PLATFORMIO_BUILD_FLAGS="-DENABLE_ATTACH_TRACE=1" to validate the flag
+// is being set correctly. Sprint 5b extends this trace with the
+// cross-band attach event log.
+#ifndef ENABLE_ATTACH_TRACE
+#define ENABLE_ATTACH_TRACE         0
+#endif
+
 // --- Fast score component caps ---
 #define FAST_SCORE_CAD_PER_TAP      10
 #define FAST_SCORE_CAD_CAP          40

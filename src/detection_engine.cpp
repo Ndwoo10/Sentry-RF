@@ -161,12 +161,20 @@ static uint8_t evidenceScore(const EvidenceTerm& e, uint32_t nowMs) {
 // Phase E: `ready` is REQUIRED, no default. Each call site must compute the
 // per-evidence readiness gate from Part 7 of the spec. `ready=false` means
 // the evidence won't contribute to scoring even though it was observed.
+//
+// Sprint 5a: optional `nonAmbient` provenance. Default false so existing
+// callers (sweepSub, protoSub, bandEnergy, cad24, proto24, bwWide, rid,
+// gnss, fhssSub, fhssCluster, cadPending) keep their unchanged behavior.
+// cadConfirmed and fskConfirmed call sites pass through the corresponding
+// CadBandSummary flag. Stored on EvidenceTerm for Sprint 5b consumption.
 static void refreshEvidence(EvidenceTerm& e, uint8_t score, uint32_t ttlMs,
-                            uint32_t nowMs, bool ready) {
+                            uint32_t nowMs, bool ready,
+                            bool nonAmbient = false) {
     e.score = score;
     e.lastSeenMs = nowMs;
     e.ttlMs = ttlMs;
     e.ready = ready;
+    e.nonAmbient = nonAmbient;
 }
 
 // Phase E helper: does the candidate already have any live FAST-side
@@ -1339,7 +1347,8 @@ static ThreatDecision evaluateCandidateEngine(const GpsData& gps,
                 uint16_t cadPts = (uint16_t)s.confirmedCadCount * FAST_SCORE_CAD_PER_TAP;
                 if (cadPts > FAST_SCORE_CAD_CAP) cadPts = FAST_SCORE_CAD_CAP;
                 refreshEvidence(c->cadConfirmed, (uint8_t)cadPts,
-                                TTL_CAD_CONFIRMED_MS, nowMs, /*ready=*/true);
+                                TTL_CAD_CONFIRMED_MS, nowMs, /*ready=*/true,
+                                /*nonAmbient=*/s.hasNonAmbientCadConfirmed);
 
                 uint16_t pendPts = (uint16_t)s.strongPendingCad * (FAST_SCORE_CAD_PER_TAP / 2);
                 if (pendPts > FAST_SCORE_CAD_CAP) pendPts = FAST_SCORE_CAD_CAP;
@@ -1349,14 +1358,31 @@ static ThreatDecision evaluateCandidateEngine(const GpsData& gps,
                 if (s.confirmedCadCount > 0 && c->state == CAND_SEEDING) {
                     c->state = CAND_TRACKING;
                 }
+
+#if ENABLE_ATTACH_TRACE
+                SERIAL_SAFE(Serial.printf(
+                    "[CAD-PROV] anchor=%.1fMHz sf=%u nonAmbient=%d fastScore=%u (cad)\n",
+                    c->anchorFreq, (unsigned)s.anchor.sf,
+                    s.hasNonAmbientCadConfirmed ? 1 : 0,
+                    (unsigned)cadPts));
+#endif
             }
 
             if (haveFsk) {
                 uint16_t fskPts = (uint16_t)s.confirmedFskCount * FAST_SCORE_FSK_PER_TAP;
                 if (fskPts > FAST_SCORE_FSK_CAP) fskPts = FAST_SCORE_FSK_CAP;
                 refreshEvidence(c->fskConfirmed, (uint8_t)fskPts,
-                                TTL_FSK_CONFIRMED_MS, nowMs, /*ready=*/true);
+                                TTL_FSK_CONFIRMED_MS, nowMs, /*ready=*/true,
+                                /*nonAmbient=*/s.hasNonAmbientFskConfirmed);
                 if (c->state == CAND_SEEDING) c->state = CAND_TRACKING;
+
+#if ENABLE_ATTACH_TRACE
+                SERIAL_SAFE(Serial.printf(
+                    "[CAD-PROV] anchor=%.1fMHz sf=%u nonAmbient=%d fastScore=%u (fsk)\n",
+                    c->anchorFreq, (unsigned)s.anchor.sf,
+                    s.hasNonAmbientFskConfirmed ? 1 : 0,
+                    (unsigned)fskPts));
+#endif
             }
 
             // FHSS may refresh — never seeds (Phase C.2 Fix 1).

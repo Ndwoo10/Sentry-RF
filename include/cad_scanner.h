@@ -55,6 +55,15 @@ struct CadBandSummary {
     // time-persistence gate). Closes the LR1121 fast-FHSS detection gap where
     // one confirmed tap on a slow scan cycle isn't enough to reach WARNING.
     int fastConfirmedCadCount;
+    // Sprint 5a (v3 Tier 1) — provenance for the cross-band attach gate.
+    // True if at least one of the confirmed CAD/FSK taps that contributed to
+    // confirmedCadCount / confirmedFskCount above is non-ambient.
+    // confirmedCadCount and confirmedFskCount themselves include ambient
+    // taps too (for backwards compatibility); these flags let downstream
+    // gating (Sprint 5b) reject pure-ambient evidence without losing the
+    // existing aggregate counts. Behavior-neutral as of 5a.
+    bool hasNonAmbientCadConfirmed;
+    bool hasNonAmbientFskConfirmed;
 };
 
 struct CadFskResult {

@@ -964,11 +964,25 @@ static void fillBandSummary(BandTracker& t, CadBandSummary& s) {
     // the candidate engine's fhssCluster evidence term to detect fast-FHSS
     // signals on LR1121 where consecutiveHits >= 3 is rarely achieved.
     s.fastConfirmedCadCount = 0;
+    // Sprint 5a (v3 Tier 1) — non-ambient provenance for the
+    // cadConfirmed/fskConfirmed evidence terms. confirmedCadCount and
+    // confirmedFskCount above include ambient taps for back-compat;
+    // these flags record whether at least one non-ambient confirmed
+    // (consecutiveHits >= TAP_CONFIRM_HITS) tap of each kind exists.
+    // Behavior-neutral as of 5a; consumed by Sprint 5b's cross-band
+    // attach gate.
+    s.hasNonAmbientCadConfirmed = false;
+    s.hasNonAmbientFskConfirmed = false;
     for (int i = 0; i < MAX_TAPS; i++) {
         const CadTap& tap = t.taps[i];
         if (tap.active && !tap.isAmbient && !tap.isFsk &&
             tap.consecutiveHits >= 2) {
             s.fastConfirmedCadCount++;
+        }
+        if (tap.active && !tap.isAmbient &&
+            tap.consecutiveHits >= TAP_CONFIRM_HITS) {
+            if (tap.isFsk) s.hasNonAmbientFskConfirmed = true;
+            else           s.hasNonAmbientCadConfirmed = true;
         }
     }
 }

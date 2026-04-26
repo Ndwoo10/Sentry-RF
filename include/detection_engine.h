@@ -93,6 +93,13 @@ struct EvidenceTerm {
     uint32_t lastSeenMs;
     uint32_t ttlMs;
     bool     ready;
+    // Sprint 5a (v3 Tier 1): provenance bit. For radio-side evidence types
+    // (cadConfirmed / fskConfirmed) this is set true only when the source
+    // observation included at least one non-ambient tap; for evidence types
+    // that don't track ambient (sweepSub, protoSub, bandEnergy, RID, GNSS,
+    // 2.4 GHz pieces) it is left at default false. Consumed by Sprint 5b's
+    // cross-band attach gate; behavior-neutral as of 5a.
+    bool     nonAmbient;
 };
 
 struct DetectionCandidate {
