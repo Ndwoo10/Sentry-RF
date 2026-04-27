@@ -44,3 +44,15 @@ Research1 (5).md
 SPRINT_ROADMAP_V2.md
 docs/*.pdf
 docs/*.zip
+
+# Research and internal docs — kept local-only
+# See ~/sentry-rf-research/ for the research material
+docs/internal/
+docs/vendor/
+docs/reference/superseded/
+# Belt-and-suspenders: ignore session-prompt patterns
+docs/[0-9]*.md
+docs/[0-9][0-9].md
+docs/end.md
+docs/flash*.md
+docs/last.md
