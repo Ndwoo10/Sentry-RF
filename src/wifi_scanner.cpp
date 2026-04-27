@@ -438,6 +438,22 @@ static void wifiObserveChannel(uint8_t channel, uint32_t durationMs) {
     if (cs.totalObservationsMs >= SPRINT6_CHANNEL_OBSERVATION_MIN_MS &&
         cs.decodedRidCount == 0 &&
         cs.undecodedOuiCount >= SPRINT6_UNPRODUCTIVE_OUI_MIN_COUNT) {
+        // Codex Review 2 B1 fix: gate skip-learn on a current valid GPS
+        // fix. The skip list is location-aware (anchored at learn time,
+        // invalidated on distance/velocity), so creating an entry while
+        // we cannot reason about location violates the fail-closed
+        // intent documented in sentry_config.h:342-345. Mutex timeout
+        // counts as "unable to verify" and also fails closed.
+        SystemState snap;
+        if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(5)) == pdTRUE) {
+            snap = systemState;
+            xSemaphoreGive(stateMutex);
+        } else {
+            return;
+        }
+        if (snap.gps.fixType < 3) {
+            return;
+        }
         const uint32_t nowMs = millis();
         const uint32_t ttl   = currentSkipTtlMs();
         cs.skipUntilMs = nowMs + ttl;
@@ -479,11 +495,27 @@ static void wifiSkipGpsCheck() {
 
     // No-fix safe: clear anchor + skip list; per brief, skip list is
     // effectively disabled when GPS isn't locked.
+    //
+    // Codex Review 2 B1 fix: invalidate any active skip entries on
+    // every no-fix observation, not only when s_skipAnchorValid is
+    // currently set. The previous guard left stale entries live if the
+    // anchor had already been cleared (e.g., by a distance trigger)
+    // but channel skip state from before the anchor was cleared was
+    // still in s_chanState[].skipUntilMs. The brief scan avoids
+    // log-flooding wifiSkipInvalidateAll() with no-op calls when no
+    // skips are active.
     if (snap.gps.fixType < 3) {
-        if (s_skipAnchorValid) {
-            wifiSkipInvalidateAll("noFix");
-            s_skipAnchorValid = false;
+        bool hasSkips = false;
+        for (int i = 0; i < 13; i++) {
+            if (s_chanState[i].skipUntilMs != 0) {
+                hasSkips = true;
+                break;
+            }
         }
+        if (hasSkips) {
+            wifiSkipInvalidateAll("noFix");
+        }
+        s_skipAnchorValid = false;
         s_velocityExceedSinceMs = 0;
         return;
     }
