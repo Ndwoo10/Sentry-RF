@@ -1,5 +1,6 @@
 #include "env_mode.h"
 #include "sentry_config.h"
+#include "detection_types.h"
 #include <Arduino.h>
 #include <nvs.h>
 #include <nvs_flash.h>
@@ -113,10 +114,10 @@ void envModeInit() {
         return;
     }
     g_envMode = clampMode(raw);
-    Serial.printf("[ENV-MODE] loaded from NVS: %s (tap=%.1f skip=%ums)\n",
-                  envModeLabel(g_envMode),
-                  currentTapThresholdDb(),
-                  (unsigned)currentSkipTtlMs());
+    SERIAL_SAFE(Serial.printf("[ENV-MODE] loaded from NVS: %s (tap=%.1f skip=%ums)\n",
+                              envModeLabel(g_envMode),
+                              currentTapThresholdDb(),
+                              (unsigned)currentSkipTtlMs()));
 }
 
 EnvMode envModeGet() { return g_envMode; }
@@ -136,10 +137,10 @@ EnvMode envModeCycle() {
         default:                next = EnvMode::SUBURBAN; break;
     }
     envModeSet(next);
-    Serial.printf("[ENV-MODE] changed: %s -> %s (tap=%.1f skip=%ums)\n",
-                  envModeLabel(prev), envModeLabel(next),
-                  currentTapThresholdDb(),
-                  (unsigned)currentSkipTtlMs());
+    SERIAL_SAFE(Serial.printf("[ENV-MODE] changed: %s -> %s (tap=%.1f skip=%ums)\n",
+                              envModeLabel(prev), envModeLabel(next),
+                              currentTapThresholdDb(),
+                              (unsigned)currentSkipTtlMs()));
     return next;
 }
 
