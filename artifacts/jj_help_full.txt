@@ -1,0 +1,50 @@
+=== JUH-MAK-IN JAMMER v3.0.0 -- Drone Signal Emulator ===
+
+DRONE PROTOCOLS:
+  e  ELRS FHSS      e1-e6=rate [PACKET-AUTH + CRC-14]
+  g  Crossfire      g/g9=915 [CRSF-FRAME, rate PARTIAL]
+  k  SiK Radio      k1=64k [MAVLink HEARTBEAT+STATUS]
+  l  mLRS           l1=19Hz [FOOTPRINT, ch grounded]
+  u  Custom LoRa    u?=settings  uf/us/ub/ur/uh/up/uw=config
+  x1-x4 ELRS 2.4G  [PACKET-AUTH + CRC-14 per-nonce]
+  x5 Ghost 2.4G    [FOOTPRINT, proprietary]
+  x6 FrSky D16     [FOOTPRINT, GFSK only]
+  x7 FlySky 2A     [FOOTPRINT, GFSK only]
+  x8 DJI Energy    [FOOTPRINT, not OFDM]
+  x9 Generic 2.4G   args: L|F <params...>
+  xq Stop XR1       (leaves sub-GHz running)
+  y  XR1 RID       WiFi [ODID-PACK] BLE [BLE4-23B] DJI [PARTIAL]
+  y1 XR1 WiFi ODID  y2 BLE ODID [BLE4-23B truncated, PARTIAL per ASTM]  y3 DJI DroneID
+  y4 XR1 WiFi NaN   (stub on ESP32C3)
+  ya All 4 RID      yq Stop XR1 RID
+  c1-c5 Combined   [multi-emitter, per-protocol fidelity applies]
+  c1 Racing Drone   ELRS915 + ELRS2.4 + ODID WiFi/BLE
+  c2 DJI Consumer   DJI energy + DJI DroneID + ODID BLE
+  c3 Long Range FPV Crossfire 915 + ODID WiFi/BLE
+  c4 Dual-Band ELRS ELRS 915 + ELRS 2.4 (RF only)
+  c5 Everything     ELRS dual-band + all 3 RID transports
+  cq Stop combined scenario
+
+INFRASTRUCTURE (False Positive Testing):
+  i  LoRaWAN US915  Single node, 8 SB2 channels, 30-60s
+  m  Mixed FP       LoRaWAN + ELRS interleaved
+  f1 Meshtastic     16-sym preamble, sync 0x2B
+  f2 Helium PoC     5 hotspots, rotating SB2 channels
+  f3 LoRaWAN EU868  868.1/868.3/868.5 MHz
+
+SPECIAL MODES:
+  c  CW Tone        b=sweep  t=power ramp
+  r  Remote ID      WiFi+BLE ASTM F3411 broadcast
+  x  Combined       RID(Core0) + ELRS(Core1)
+  w  Drone Swarm    n=cycle count (1/4/8/16)
+
+CONTROLS:
+  q  Stop TX        p=cycle power  h/?=this menu
+
+[ELRS-FCC915] 40ch 903.5-926.9MHz SF6/BW500 200Hz hop_every_4 sync_ch=20
+  Dwell: 20ms/freq  Hops: 50/s  Preamble: 6sym  SyncWord: 0x12  Power: 10 dBm
+[ELRS] TX OFF: 2 packets, 0 hops (0.0 pkts/hop avg)
+[mLRS-915] 43ch 902-928MHz LoRa 19Hz symmetric [FOOTPRINT]
+  SF7/BW500  Dwell: 105ms/freq  Hops: 9.5/s  Power: 10 dBm
+  NOTE: 50 Hz FSK bitrate/deviation approximated -- not publicly documented by mLRS
+TX power: 14 dBm

@@ -1,0 +1,111 @@
+{
+  "test_id": "K04",
+  "label": "Combined_LongRange_FPV",
+  "cmd": "c3",
+  "group": "K",
+  "timestamp_start": "2026-04-24T13:57:45.928804",
+  "retry_count": 0,
+  "flags": [],
+  "status": "OK",
+  "baseline": {
+    "starting_threat": "CLEAR",
+    "ambient_events": [
+      {
+        "t_rel": 1.01,
+        "line": "[PURSUIT] Activated"
+      },
+      {
+        "t_rel": 20.17,
+        "line": "[FSM] CLEAR -> ADVISORY at 34913ms"
+      },
+      {
+        "t_rel": 20.17,
+        "line": "[ALERT] ADVISORY RF: Candidate RF track 903.0 MHz (903.0 MHz)"
+      },
+      {
+        "t_rel": 20.17,
+        "line": "[ALERT] ESCALATION: CLEAR -> ADVISORY \u2014 buzzer: silent"
+      },
+      {
+        "t_rel": 44.37,
+        "line": "[FSM] ADVISORY -> CLEAR at 59666ms"
+      },
+      {
+        "t_rel": 44.37,
+        "line": "[ALERT] INFO RF: Candidate clear"
+      },
+      {
+        "t_rel": 44.37,
+        "line": "[ALERT] De-escalation: ADVISORY -> CLEAR \u2014 buzzer: ALL_CLEAR"
+      },
+      {
+        "t_rel": 45.37,
+        "line": "[PURSUIT] Deactivated"
+      },
+      {
+        "t_rel": 61.52,
+        "line": "[PURSUIT] Activated"
+      },
+      {
+        "t_rel": 76.66,
+        "line": "[PURSUIT] Deactivated"
+      }
+    ],
+    "baseline_anchor_freq_mhz": null,
+    "baseline_cad_metrics": {
+      "cycle": "27",
+      "subConf": "0",
+      "sub24Conf": "2",
+      "fastConf": "0",
+      "taps": "2",
+      "div": "29",
+      "persDiv": "29",
+      "vel": "0",
+      "sustainedCycles": "25",
+      "score": "0",
+      "fast": "0",
+      "confirm": "0",
+      "anchor": "none"
+    },
+    "baseline_fhss_spread_subghz": null,
+    "baseline_fhss_spread_2g4": null
+  },
+  "sentry_tx_window": {
+    "peak_threat": "CLEAR",
+    "peak_threat_t_rel_s": null,
+    "threat_transitions": [],
+    "time_to_advisory_s": null,
+    "time_to_warning_s": null,
+    "time_to_critical_s": null,
+    "cad_at_peak": null,
+    "cad_at_peak_line": null,
+    "scan_peaks": [],
+    "fhss_spread_events": [],
+    "alert_events": []
+  },
+  "jj_tx": {
+    "tx_started_confirmed": true,
+    "protocol_banner": "[CRSF-915] 100ch 902-928MHz FSK 85.1kbps 150Hz 10 dBm [CRSF-FRAME]",
+    "proto_counter_key": "ELRS",
+    "packets": 2,
+    "hops": 0,
+    "duration_s": 180.317,
+    "effective_pkts_per_s": 0.011,
+    "effective_hops_per_s": 0.0,
+    "all_counters": {
+      "ELRS": {
+        "packets": 2,
+        "hops": 0,
+        "line": "[ELRS] TX OFF: 2 packets, 0 hops (0.0 pkts/hop avg)"
+      }
+    }
+  },
+  "sentry_post_q": {
+    "return_to_starting_threat_s": null,
+    "reached_clear": false,
+    "clear_achieved_at_s": null,
+    "final_threat": "CLEAR"
+  },
+  "timestamp_end": "2026-04-24T14:02:56.258297",
+  "duration_s": 308.71
+}

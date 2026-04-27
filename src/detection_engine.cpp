@@ -6,6 +6,7 @@
 #include "sentry_config.h"
 #include "data_logger.h"       // Phase L: emitZmqJson on threat transitions
 #include "alert_handler.h"     // Issue 8: alertQueueDropInc()
+#include "env_mode.h"          // Sprint 7: currentTapThresholdDb()
 #include <Arduino.h>
 #include <math.h>
 #include <string.h>
@@ -558,7 +559,8 @@ static float computeNoiseFloor(const float* rssi, int count) {
 
 // ── Peak extraction (strongest-peak selection) ──────────────────────────────
 
-// PEAK_THRESHOLD_DB, PEAK_ABS_FLOOR_DBM, MAX_PEAKS from sentry_config.h
+// PEAK_ABS_FLOOR_DBM, MAX_PEAKS from sentry_config.h
+// Sprint 7: peak threshold is now mode-dependent — see currentTapThresholdDb()
 
 struct DetectedPeak {
     float          frequency;
@@ -570,7 +572,7 @@ struct DetectedPeak {
 };
 
 static int extractPeaks(const ScanResult& scan, float noiseFloor, DetectedPeak* peaks) {
-    float relThresh = noiseFloor + PEAK_THRESHOLD_DB;
+    float relThresh = noiseFloor + currentTapThresholdDb();
     float threshold = (relThresh > PEAK_ABS_FLOOR_DBM) ? relThresh : PEAK_ABS_FLOOR_DBM;
     int peakCount = 0;
 
@@ -593,7 +595,7 @@ static int extractPeaks(const ScanResult& scan, float noiseFloor, DetectedPeak* 
             float freq = SCAN_FREQ_START + (i * SCAN_FREQ_STEP);
 
             // Phase I: bandwidth classification. Uses the same `threshold`
-            // already computed above (max(noiseFloor + PEAK_THRESHOLD_DB,
+            // already computed above (max(noiseFloor + currentTapThresholdDb(),
             // PEAK_ABS_FLOOR_DBM)) so the adjacency run matches the gate
             // that let the peak through in the first place.
             int adjBins = countElevatedAdjacentBins(
@@ -765,7 +767,7 @@ static int countPersistentProtocolUS() {
 // ── 2.4 GHz peak extraction ────────────────────────────────────────────────
 
 static int extractPeaks24(const ScanResult24& scan, float noiseFloor, DetectedPeak* peaks) {
-    float threshold = noiseFloor + PEAK_THRESHOLD_DB;
+    float threshold = noiseFloor + currentTapThresholdDb();
     int peakCount = 0;
 
     for (int i = 1; i < SCAN_24_BIN_COUNT - 1 && peakCount < MAX_PEAKS; i++) {

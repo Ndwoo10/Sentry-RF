@@ -6,6 +6,7 @@
 #include "cad_scanner.h"
 #include "detection_engine.h"
 #include "gps_manager.h"
+#include "env_mode.h"
 #include "version.h"
 #include "splash_logo.h"
 #include <Arduino.h>
@@ -725,6 +726,49 @@ void screenSpectrum24(Adafruit_SSD1306& disp, const SystemState& state, int page
     snprintf(buf, sizeof(buf), "Pk:%.0f %.0fdBm",
              state.spectrum24.peakFreq, state.spectrum24.peakRSSI);
     disp.print(buf);
+
+    drawPageDots(disp, page, NUM_SCREENS);
+    disp.display();
+}
+
+// ── Sprint 7: Env-Mode page ─────────────────────────────────
+//
+// Layout for 128x64 SSD1306. The bracketed mode shows the CURRENTLY active
+// EnvMode; "Hold 3-5s to change" is the operator instruction. The screen is
+// re-rendered at the 2 Hz cadence used by every other page, so a long-press
+// cycle reflects on the next frame after envModeCycle() runs.
+void screenEnvMode(Adafruit_SSD1306& disp, const SystemState& state, int page) {
+    (void)state;
+    disp.clearDisplay();
+    drawHeader(disp, "ENV MODE");
+
+    EnvMode m = envModeGet();
+
+    char modeBuf[16];
+    snprintf(modeBuf, sizeof(modeBuf), "[%s]", envModeLabel(m));
+    disp.setTextSize(2);
+    int16_t bx, by; uint16_t bw, bh;
+    disp.getTextBounds(modeBuf, 0, 0, &bx, &by, &bw, &bh);
+    int cx = (SCREEN_WIDTH - (int)bw) / 2;
+    if (cx < 0) cx = 0;
+    disp.setCursor(cx, 14);
+    disp.print(modeBuf);
+    disp.setTextSize(1);
+
+    char buf[22];
+    disp.setCursor(0, 36);
+    snprintf(buf, sizeof(buf), " Tap thresh: %.0f dB",
+             currentTapThresholdDb());
+    disp.print(buf);
+
+    disp.setCursor(0, 46);
+    uint32_t ttlMs = currentSkipTtlMs();
+    snprintf(buf, sizeof(buf), " WiFi skip:  %u min",
+             (unsigned)(ttlMs / 60000));
+    disp.print(buf);
+
+    disp.setCursor(0, 56);
+    disp.print("Hold 3-5s to change");
 
     drawPageDots(disp, page, NUM_SCREENS);
     disp.display();

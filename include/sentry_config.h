@@ -29,6 +29,12 @@ enum OperatingMode : uint8_t {
 #define HIGH_ALERT_RSSI_INTERVAL_MS  10000
 
 // ── RSSI Detection Thresholds ─────────────────────────────────────────
+// Sprint 7: PEAK_THRESHOLD_DB is the legacy single-mode value. The two
+// extractPeaks*() call sites in detection_engine.cpp now read
+// currentTapThresholdDb() from env_mode.h, which returns 12/10/6 dB based
+// on the runtime EnvMode. This constant is kept as the SUBURBAN value for
+// backward compat with anything else that might reference it.
+// DEPRECATED for new code — use currentTapThresholdDb().
 static const float PEAK_THRESHOLD_DB     = 10.0f;  // dB above noise floor for peak extraction
 static const float PEAK_ABS_FLOOR_DBM    = -85.0f; // dBm minimum for RSSI peak
 static const int   MAX_PEAKS             = 8;       // max peaks extracted per sweep
@@ -325,10 +331,12 @@ static const unsigned long REMINDER_INTERVAL = 30000;  // 30 seconds
 #define SPRINT6_SKIP_TTL_SUBURBAN_MS 180000   // 3 min  (default)
 #define SPRINT6_SKIP_TTL_RURAL_MS     60000   // 1 min  (sparsest, shortest skip)
 
-// Sprint 6 uses the Suburban default. Sprint 7 will replace this with a
-// runtime-mutable variable populated from NVS-backed environment-mode UI
-// selection. Use SPRINT6_CURRENT_ENV_MODE everywhere the TTL is needed;
-// Sprint 7 just changes that one symbol from a #define to a variable.
+// Sprint 7 replaced SPRINT6_CURRENT_ENV_MODE with currentSkipTtlMs() in
+// env_mode.h — the value is now sourced from a runtime EnvMode variable
+// persisted to NVS. The macro below is kept only as a compile-time
+// fallback for anything that still references it; production code paths
+// now read currentSkipTtlMs() at the call site.
+// DEPRECATED for new code — use currentSkipTtlMs().
 #define SPRINT6_CURRENT_ENV_MODE     SPRINT6_SKIP_TTL_SUBURBAN_MS
 
 // GPS-aware skip invalidation. BOTH triggers invalidate all skip entries:

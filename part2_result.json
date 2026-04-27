@@ -1,0 +1,181 @@
+{
+  "duration_s": 180,
+  "line_count": 686,
+  "boot_banner_t_s": 1.001,
+  "first_any_threat_scan_t_s": 15.109,
+  "first_any_threat_level": "CLEAR",
+  "first_CLEAR_t_s": 15.109,
+  "threat_transitions": [
+    {
+      "t": 15.11,
+      "level": "CLEAR"
+    }
+  ],
+  "final_60s_threat_counts": {
+    "CLEAR": 18
+  },
+  "sustains_CLEAR": true,
+  "final_cad_line": "[CAD] cycle=49 subConf=0 sub24Conf=10 fastConf=0 taps=12 div=64 persDiv=32 vel=0 sustainedCycles=11 score=0 fast=0 confirm=0 anchor=none",
+  "final_cad_fields": {
+    "cycle": "49",
+    "subConf": "0",
+    "sub24Conf": "10",
+    "fastConf": "0",
+    "taps": "12",
+    "div": "64",
+    "persDiv": "32",
+    "vel": "0",
+    "sustainedCycles": "11",
+    "score": "0",
+    "fast": "0",
+    "confirm": "0",
+    "anchor": "none"
+  },
+  "final_anchor_parsed": {
+    "t": 50.39,
+    "freq": "913.0MHz",
+    "sf": "SF6",
+    "hits": 5
+  },
+  "anchor_history_first5": [
+    {
+      "t": 15.11,
+      "freq": "902.0MHz",
+      "sf": "SF6",
+      "hits": 1
+    },
+    {
+      "t": 19.14,
+      "freq": "902.0MHz",
+      "sf": "SF6",
+      "hits": 2
+    },
+    {
+      "t": 22.16,
+      "freq": "908.8MHz",
+      "sf": "SF6",
+      "hits": 4
+    },
+    {
+      "t": 25.19,
+      "freq": "908.8MHz",
+      "sf": "SF6",
+      "hits": 6
+    },
+    {
+      "t": 30.23,
+      "freq": "908.8MHz",
+      "sf": "SF6",
+      "hits": 7
+    }
+  ],
+  "anchor_history_last5": [
+    {
+      "t": 35.27,
+      "freq": "905.6MHz",
+      "sf": "SF6",
+      "hits": 9
+    },
+    {
+      "t": 39.3,
+      "freq": "902.0MHz",
+      "sf": "SF6",
+      "hits": 1
+    },
+    {
+      "t": 41.32,
+      "freq": "902.0MHz",
+      "sf": "SF6",
+      "hits": 2
+    },
+    {
+      "t": 45.34,
+      "freq": "902.0MHz",
+      "sf": "SF6",
+      "hits": 3
+    },
+    {
+      "t": 50.39,
+      "freq": "913.0MHz",
+      "sf": "SF6",
+      "hits": 5
+    }
+  ],
+  "fhss_spread_events_count": 30,
+  "fhss_spread_first5": [
+    {
+      "t": 101.8,
+      "band": "subGHz",
+      "unique": 95,
+      "baseline": 92
+    },
+    {
+      "t": 102.82,
+      "band": "2G4",
+      "unique": 28,
+      "baseline": 25
+    },
+    {
+      "t": 104.84,
+      "band": "2G4",
+      "unique": 28,
+      "baseline": 25
+    },
+    {
+      "t": 106.85,
+      "band": "2G4",
+      "unique": 28,
+      "baseline": 25
+    },
+    {
+      "t": 112.91,
+      "band": "2G4",
+      "unique": 29,
+      "baseline": 25
+    }
+  ],
+  "fhss_spread_last5": [
+    {
+      "t": 165.3,
+      "band": "subGHz",
+      "unique": 94,
+      "baseline": 84
+    },
+    {
+      "t": 173.36,
+      "band": "2G4",
+      "unique": 26,
+      "baseline": 23
+    },
+    {
+      "t": 174.36,
+      "band": "subGHz",
+      "unique": 92,
+      "baseline": 82
+    },
+    {
+      "t": 175.36,
+      "band": "2G4",
+      "unique": 26,
+      "baseline": 23
+    },
+    {
+      "t": 177.39,
+      "band": "2G4",
+      "unique": 26,
+      "baseline": 23
+    }
+  ],
+  "fhss_baseline_final": {
+    "subGHz": {
+      "baseline": 82,
+      "unique_last": 92,
+      "t_last": 174.36
+    },
+    "2G4": {
+      "baseline": 23,
+      "unique_last": 26,
+      "t_last": 177.39
+    }
+  }
+}

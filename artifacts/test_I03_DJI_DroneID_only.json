@@ -1,0 +1,262 @@
+{
+  "test_id": "I03",
+  "label": "DJI_DroneID_only",
+  "cmd": "y3",
+  "group": "I",
+  "timestamp_start": "2026-04-24T13:17:24.160654",
+  "retry_count": 0,
+  "flags": [],
+  "status": "OK",
+  "baseline": {
+    "starting_threat": "CLEAR",
+    "ambient_events": [
+      {
+        "t_rel": 7.06,
+        "line": "[PURSUIT] Activated"
+      },
+      {
+        "t_rel": 26.26,
+        "line": "[PURSUIT] Deactivated"
+      },
+      {
+        "t_rel": 35.35,
+        "line": "[PURSUIT] Activated"
+      },
+      {
+        "t_rel": 46.47,
+        "line": "[PURSUIT] Deactivated"
+      },
+      {
+        "t_rel": 61.64,
+        "line": "[PURSUIT] Activated"
+      },
+      {
+        "t_rel": 70.74,
+        "line": "[FSM] CLEAR -> ADVISORY at 85554ms"
+      },
+      {
+        "t_rel": 70.74,
+        "line": "[ALERT] ADVISORY RF: Candidate RF track 906.9 MHz (906.9 MHz)"
+      },
+      {
+        "t_rel": 70.74,
+        "line": "[ALERT] ESCALATION: CLEAR -> ADVISORY \u2014 buzzer: silent"
+      },
+      {
+        "t_rel": 75.78,
+        "line": "[PURSUIT] Deactivated"
+      },
+      {
+        "t_rel": 85.89,
+        "line": "[FSM] ADVISORY -> CLEAR at 100896ms"
+      },
+      {
+        "t_rel": 85.89,
+        "line": "[ALERT] INFO RF: Candidate clear (924.0 MHz)"
+      },
+      {
+        "t_rel": 85.89,
+        "line": "[ALERT] De-escalation: ADVISORY -> CLEAR \u2014 buzzer: ALL_CLEAR"
+      },
+      {
+        "t_rel": 85.89,
+        "line": "[PURSUIT] Activated"
+      }
+    ],
+    "baseline_anchor_freq_mhz": 924.0,
+    "baseline_cad_metrics": {
+      "cycle": "27",
+      "subConf": "1",
+      "sub24Conf": "5",
+      "fastConf": "1",
+      "taps": "7",
+      "div": "62",
+      "persDiv": "30",
+      "vel": "0",
+      "sustainedCycles": "7",
+      "score": "10",
+      "fast": "10",
+      "confirm": "0",
+      "anchor": "924.0MHz",
+      "hits": "4"
+    },
+    "baseline_fhss_spread_subghz": 90,
+    "baseline_fhss_spread_2g4": null
+  },
+  "sentry_tx_window": {
+    "peak_threat": "ADVISORY",
+    "peak_threat_t_rel_s": 70.434,
+    "threat_transitions": [
+      {
+        "from": "CLEAR",
+        "to": "ADVISORY",
+        "time_from_tx_start_s": 70.434
+      },
+      {
+        "from": "ADVISORY",
+        "to": "CLEAR",
+        "time_from_tx_start_s": 90.573
+      }
+    ],
+    "time_to_advisory_s": 70.434,
+    "time_to_warning_s": null,
+    "time_to_critical_s": null,
+    "cad_at_peak": {
+      "cycle": "17",
+      "subConf": "0",
+      "sub24Conf": "1",
+      "fastConf": "6",
+      "taps": "7",
+      "div": "32",
+      "persDiv": "32",
+      "vel": "0",
+      "sustainedCycles": "15",
+      "score": "30",
+      "fast": "30",
+      "confirm": "0",
+      "anchor": "918.8MHz",
+      "hits": "2",
+      "_anchor_freq": "918.8MHz",
+      "_anchor_sf": "SF6",
+      "_anchor_hits": "2"
+    },
+    "cad_at_peak_line": "[CAD] cycle=17 subConf=0 sub24Conf=1 fastConf=6 taps=7 div=32 persDiv=32 vel=0 sustainedCycles=15 score=30 fast=30 confirm=0 anchor=918.8MHz SF6 hits=2",
+    "scan_peaks": [
+      {
+        "t_rel": 15.036,
+        "freq_mhz": 878.8,
+        "rssi_dbm": -99.0
+      },
+      {
+        "t_rel": 25.098,
+        "freq_mhz": 870.4,
+        "rssi_dbm": -95.0
+      },
+      {
+        "t_rel": 35.162,
+        "freq_mhz": 871.0,
+        "rssi_dbm": -99.0
+      },
+      {
+        "t_rel": 45.237,
+        "freq_mhz": 885.0,
+        "rssi_dbm": -98.0
+      },
+      {
+        "t_rel": 55.326,
+        "freq_mhz": 876.6,
+        "rssi_dbm": -99.5
+      },
+      {
+        "t_rel": 65.404,
+        "freq_mhz": 871.2,
+        "rssi_dbm": -99.0
+      },
+      {
+        "t_rel": 76.481,
+        "freq_mhz": 874.0,
+        "rssi_dbm": -98.0
+      },
+      {
+        "t_rel": 86.542,
+        "freq_mhz": 870.4,
+        "rssi_dbm": -98.0
+      },
+      {
+        "t_rel": 96.633,
+        "freq_mhz": 875.0,
+        "rssi_dbm": -105.0
+      },
+      {
+        "t_rel": 106.711,
+        "freq_mhz": 870.2,
+        "rssi_dbm": -99.0
+      },
+      {
+        "t_rel": 116.801,
+        "freq_mhz": 884.0,
+        "rssi_dbm": -100.5
+      }
+    ],
+    "fhss_spread_events": [
+      {
+        "t_rel": 75.465,
+        "band": "subGHz",
+        "unique": 96,
+        "baseline": 91,
+        "delta": 5
+      },
+      {
+        "t_rel": 84.53,
+        "band": "subGHz",
+        "unique": 94,
+        "baseline": 91,
+        "delta": 3
+      },
+      {
+        "t_rel": 92.588,
+        "band": "subGHz",
+        "unique": 93,
+        "baseline": 90,
+        "delta": 3
+      },
+      {
+        "t_rel": 109.741,
+        "band": "subGHz",
+        "unique": 96,
+        "baseline": 90,
+        "delta": 6
+      },
+      {
+        "t_rel": 112.775,
+        "band": "subGHz",
+        "unique": 96,
+        "baseline": 90,
+        "delta": 6
+      }
+    ],
+    "alert_events": [
+      {
+        "t_rel": 70.434,
+        "line": "[ALERT] ADVISORY RF: Candidate RF track 919.1 MHz (919.1 MHz)"
+      },
+      {
+        "t_rel": 70.434,
+        "line": "[ALERT] ESCALATION: CLEAR -> ADVISORY \u2014 buzzer: silent"
+      },
+      {
+        "t_rel": 90.573,
+        "line": "[ALERT] INFO RF: Candidate clear (902.7 MHz)"
+      },
+      {
+        "t_rel": 90.573,
+        "line": "[ALERT] De-escalation: ADVISORY -> CLEAR \u2014 buzzer: ALL_CLEAR"
+      }
+    ]
+  },
+  "jj_tx": {
+    "tx_started_confirmed": true,
+    "protocol_banner": null,
+    "proto_counter_key": "ELRS",
+    "packets": 2,
+    "hops": 0,
+    "duration_s": 120.218,
+    "effective_pkts_per_s": 0.017,
+    "effective_hops_per_s": 0.0,
+    "all_counters": {
+      "ELRS": {
+        "packets": 2,
+        "hops": 0,
+        "line": "[ELRS] TX OFF: 2 packets, 0 hops (0.0 pkts/hop avg)"
+      }
+    }
+  },
+  "sentry_post_q": {
+    "return_to_starting_threat_s": 0.601,
+    "reached_clear": true,
+    "clear_achieved_at_s": 0.601,
+    "final_threat": "ADVISORY"
+  },
+  "timestamp_end": "2026-04-24T13:21:34.355173",
+  "duration_s": 248.58
+}

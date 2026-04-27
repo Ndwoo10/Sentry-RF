@@ -1,0 +1,146 @@
+{
+  "help_text_chars": 2218,
+  "documented_commands_raw": [
+    "e",
+    "g",
+    "k",
+    "l",
+    "u",
+    "x5",
+    "x6",
+    "x7",
+    "x8",
+    "x9",
+    "xq",
+    "y",
+    "y1",
+    "y4",
+    "ya",
+    "c1",
+    "c2",
+    "c3",
+    "c4",
+    "c5",
+    "cq",
+    "i",
+    "m",
+    "f1",
+    "f2",
+    "f3",
+    "c",
+    "r",
+    "x",
+    "w",
+    "q"
+  ],
+  "exploratory_tests": [
+    {
+      "cmd": "e1i",
+      "verdict": "ACCEPTED",
+      "output_chars": 260,
+      "first_line": "[mLRS] TX OFF: 34 packets, 33 hops"
+    },
+    {
+      "cmd": "e1a",
+      "verdict": "ACCEPTED",
+      "output_chars": 227,
+      "first_line": "[ELRS-AU915] 20ch 915.5-926.9MHz SF6/BW500 200Hz hop_every_8 sync_ch=10"
+    },
+    {
+      "cmd": "e1u",
+      "verdict": "ACCEPTED",
+      "output_chars": 297,
+      "first_line": "[ELRS-EU868] 13ch 863.3-869.6MHz SF6/BW500 200Hz hop_every_8 sync_ch=6"
+    },
+    {
+      "cmd": "e2u",
+      "verdict": "ACCEPTED",
+      "output_chars": 297,
+      "first_line": "[ELRS-EU868] 13ch 863.3-869.6MHz SF7/BW500 100Hz hop_every_8 sync_ch=6"
+    },
+    {
+      "cmd": "e3u",
+      "verdict": "ACCEPTED",
+      "output_chars": 296,
+      "first_line": "[ELRS-EU868] 13ch 863.3-869.6MHz SF8/BW500 50Hz hop_every_8 sync_ch=6"
+    },
+    {
+      "cmd": "e4u",
+      "verdict": "ACCEPTED",
+      "output_chars": 294,
+      "first_line": "[ELRS-EU868] 13ch 863.3-869.6MHz SF9/BW500 25Hz hop_every_8 sync_ch=6"
+    },
+    {
+      "cmd": "e5u",
+      "verdict": "ACCEPTED",
+      "output_chars": 298,
+      "first_line": "[ELRS-EU868] 13ch 863.3-869.6MHz SF6/BW500 250Hz hop_every_2 sync_ch=6"
+    },
+    {
+      "cmd": "e6u",
+      "verdict": "ACCEPTED",
+      "output_chars": 298,
+      "first_line": "[ELRS-EU868] 13ch 863.3-869.6MHz SF5/BW500 500Hz hop_every_2 sync_ch=6"
+    },
+    {
+      "cmd": "e2a",
+      "verdict": "ACCEPTED",
+      "output_chars": 227,
+      "first_line": "[ELRS-AU915] 20ch 915.5-926.9MHz SF7/BW500 100Hz hop_every_8 sync_ch=10"
+    },
+    {
+      "cmd": "e3a",
+      "verdict": "ACCEPTED",
+      "output_chars": 226,
+      "first_line": "[ELRS-AU915] 20ch 915.5-926.9MHz SF8/BW500 50Hz hop_every_8 sync_ch=10"
+    },
+    {
+      "cmd": "e4a",
+      "verdict": "ACCEPTED",
+      "output_chars": 224,
+      "first_line": "[ELRS-AU915] 20ch 915.5-926.9MHz SF9/BW500 25Hz hop_every_8 sync_ch=10"
+    },
+    {
+      "cmd": "e5a",
+      "verdict": "ACCEPTED",
+      "output_chars": 228,
+      "first_line": "[ELRS-AU915] 20ch 915.5-926.9MHz SF6/BW500 250Hz hop_every_2 sync_ch=10"
+    },
+    {
+      "cmd": "e6a",
+      "verdict": "ACCEPTED",
+      "output_chars": 228,
+      "first_line": "[ELRS-AU915] 20ch 915.5-926.9MHz SF5/BW500 500Hz hop_every_2 sync_ch=10"
+    },
+    {
+      "cmd": "e2i",
+      "verdict": "ACCEPTED",
+      "output_chars": 225,
+      "first_line": "[ELRS-IN866] 4ch 865.4-867.0MHz SF7/BW500 100Hz hop_every_8 sync_ch=2"
+    },
+    {
+      "cmd": "e3i",
+      "verdict": "ACCEPTED",
+      "output_chars": 224,
+      "first_line": "[ELRS-IN866] 4ch 865.4-867.0MHz SF8/BW500 50Hz hop_every_8 sync_ch=2"
+    },
+    {
+      "cmd": "e4i",
+      "verdict": "ACCEPTED",
+      "output_chars": 222,
+      "first_line": "[ELRS-IN866] 4ch 865.4-867.0MHz SF9/BW500 25Hz hop_every_8 sync_ch=2"
+    },
+    {
+      "cmd": "e5i",
+      "verdict": "ACCEPTED",
+      "output_chars": 226,
+      "first_line": "[ELRS-IN866] 4ch 865.4-867.0MHz SF6/BW500 250Hz hop_every_2 sync_ch=2"
+    },
+    {
+      "cmd": "e6i",
+      "verdict": "ACCEPTED",
+      "output_chars": 226,
+      "first_line": "[ELRS-IN866] 4ch 865.4-867.0MHz SF5/BW500 500Hz hop_every_2 sync_ch=2"
+    }
+  ]
+}

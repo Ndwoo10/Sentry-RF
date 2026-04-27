@@ -1,0 +1,147 @@
+{
+  "part": "1_k1_from_advisory",
+  "pre_threat": null,
+  "pre_cad_line": null,
+  "tx_cmd": "k1",
+  "tx_seconds": 15.0,
+  "sentry_peak_threat_during_tx": "CLEAR",
+  "sentry_peak_t_rel_s": null,
+  "sentry_transitions_during_tx": [],
+  "sentry_transitions_post_q": [],
+  "cad_first_during_tx": "[CAD] cycle=277 subConf=0 sub24Conf=16 fastConf=0 taps=16 div=64 persDiv=64 vel=0 sustainedCycles=16 score=0 fast=0 confirm=0 anchor=none",
+  "cad_last_during_tx": "[CAD] cycle=280 subConf=0 sub24Conf=15 fastConf=0 taps=15 div=24 persDiv=0 vel=0 sustainedCycles=0 score=0 fast=0 confirm=0 anchor=none",
+  "cad_delta": {
+    "div": [
+      "64",
+      "24"
+    ],
+    "persDiv": [
+      "64",
+      "0"
+    ],
+    "taps": [
+      "16",
+      "15"
+    ],
+    "confirm": [
+      "0",
+      "0"
+    ],
+    "subConf": [
+      "0",
+      "0"
+    ],
+    "sub24Conf": [
+      "16",
+      "15"
+    ],
+    "fastConf": [
+      "0",
+      "0"
+    ],
+    "score": [
+      "0",
+      "0"
+    ],
+    "fast": [
+      "0",
+      "0"
+    ],
+    "anchor": [
+      "none",
+      "none"
+    ],
+    "sustainedCycles": [
+      "16",
+      "0"
+    ]
+  },
+  "fhss_spread_events_during_tx": 4,
+  "fhss_spread_first3": [
+    [
+      4.463,
+      "[FHSS-SPREAD] 84 unique (baseline=78) -> diversity fired"
+    ],
+    [
+      5.465,
+      "[FHSS-SPREAD-2G4] 23 unique (baseline=13) -> diversity fired"
+    ],
+    [
+      7.48,
+      "[FHSS-SPREAD] 92 unique (baseline=78) -> diversity fired"
+    ]
+  ],
+  "jj_lines_during_tx": [
+    "[SiK-US915] 50ch 915.0-928.0MHz GFSK@64kbps TDM [MAVLink-FRAME]",
+    "  Channel width: 250kHz  Dwell: ~20ms/freq  Hops: 50/s  Power: 10 dBm"
+  ],
+  "jj_lines_post_q_pre_help": [
+    "[SiK] TX OFF: 841 packets, 840 hops",
+    "TX stopped via serial."
+  ],
+  "jj_help_reply_sik_mavlink": [
+    "  k  SiK Radio      k1=64k [MAVLink HEARTBEAT+STATUS]"
+  ],
+  "jj_help_reply_tx_counters": [
+    "[ELRS] TX OFF: 2 packets, 0 hops (0.0 pkts/hop avg)"
+  ],
+  "jj_help_reply_power": [
+    "  c  CW Tone        b=sweep  t=power ramp",
+    "  q  Stop TX        p=cycle power  h/?=this menu",
+    "  Dwell: 20ms/freq  Hops: 50/s  Preamble: 6sym  SyncWord: 0x12  Power: 10 dBm",
+    "  SF7/BW500  Dwell: 105ms/freq  Hops: 9.5/s  Power: 10 dBm",
+    "TX power: 14 dBm"
+  ],
+  "jj_help_reply_full": [
+    "=== JUH-MAK-IN JAMMER v3.0.0 -- Drone Signal Emulator ===",
+    "",
+    "DRONE PROTOCOLS:",
+    "  e  ELRS FHSS      e1-e6=rate [PACKET-AUTH + CRC-14]",
+    "  g  Crossfire      g/g9=915 [CRSF-FRAME, rate PARTIAL]",
+    "  k  SiK Radio      k1=64k [MAVLink HEARTBEAT+STATUS]",
+    "  l  mLRS           l1=19Hz [FOOTPRINT, ch grounded]",
+    "  u  Custom LoRa    u?=settings  uf/us/ub/ur/uh/up/uw=config",
+    "  x1-x4 ELRS 2.4G  [PACKET-AUTH + CRC-14 per-nonce]",
+    "  x5 Ghost 2.4G    [FOOTPRINT, proprietary]",
+    "  x6 FrSky D16     [FOOTPRINT, GFSK only]",
+    "  x7 FlySky 2A     [FOOTPRINT, GFSK only]",
+    "  x8 DJI Energy    [FOOTPRINT, not OFDM]",
+    "  x9 Generic 2.4G   args: L|F <params...>",
+    "  xq Stop XR1       (leaves sub-GHz running)",
+    "  y  XR1 RID       WiFi [ODID-PACK] BLE [BLE4-23B] DJI [PARTIAL]",
+    "  y1 XR1 WiFi ODID  y2 BLE ODID [BLE4-23B truncated, PARTIAL per ASTM]  y3 DJI DroneID",
+    "  y4 XR1 WiFi NaN   (stub on ESP32C3)",
+    "  ya All 4 RID      yq Stop XR1 RID",
+    "  c1-c5 Combined   [multi-emitter, per-protocol fidelity applies]",
+    "  c1 Racing Drone   ELRS915 + ELRS2.4 + ODID WiFi/BLE",
+    "  c2 DJI Consumer   DJI energy + DJI DroneID + ODID BLE",
+    "  c3 Long Range FPV Crossfire 915 + ODID WiFi/BLE",
+    "  c4 Dual-Band ELRS ELRS 915 + ELRS 2.4 (RF only)",
+    "  c5 Everything     ELRS dual-band + all 3 RID transports",
+    "  cq Stop combined scenario",
+    "",
+    "INFRASTRUCTURE (False Positive Testing):",
+    "  i  LoRaWAN US915  Single node, 8 SB2 channels, 30-60s",
+    "  m  Mixed FP       LoRaWAN + ELRS interleaved",
+    "  f1 Meshtastic     16-sym preamble, sync 0x2B",
+    "  f2 Helium PoC     5 hotspots, rotating SB2 channels",
+    "  f3 LoRaWAN EU868  868.1/868.3/868.5 MHz",
+    "",
+    "SPECIAL MODES:",
+    "  c  CW Tone        b=sweep  t=power ramp",
+    "  r  Remote ID      WiFi+BLE ASTM F3411 broadcast",
+    "  x  Combined       RID(Core0) + ELRS(Core1)",
+    "  w  Drone Swarm    n=cycle count (1/4/8/16)",
+    "",
+    "CONTROLS:",
+    "  q  Stop TX        p=cycle power  h/?=this menu",
+    "",
+    "[ELRS-FCC915] 40ch 903.5-926.9MHz SF6/BW500 200Hz hop_every_4 sync_ch=20",
+    "  Dwell: 20ms/freq  Hops: 50/s  Preamble: 6sym  SyncWord: 0x12  Power: 10 dBm",
+    "[ELRS] TX OFF: 2 packets, 0 hops (0.0 pkts/hop avg)",
+    "[mLRS-915] 43ch 902-928MHz LoRa 19Hz symmetric [FOOTPRINT]",
+    "  SF7/BW500  Dwell: 105ms/freq  Hops: 9.5/s  Power: 10 dBm",
+    "  NOTE: 50 Hz FSK bitrate/deviation approximated -- not publicly documented by mLRS",
+    "TX power: 14 dBm"
+  ]
+}

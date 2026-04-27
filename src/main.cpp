@@ -19,6 +19,7 @@
 #include "ble_scanner.h"
 #include "alert_handler.h"
 #include "error_messages.h"
+#include "env_mode.h"
 
 // Hardware objects — each owned by exactly one task after setup()
 SPIClass loraSPI(HSPI);
@@ -589,6 +590,10 @@ static const ScreenFn screens[] = {
 #ifdef BOARD_T3S3_LR1121
     , screenSpectrum24
 #endif
+    // Sprint 7: env-mode page is the last screen on every board, so its
+    // index matches SCREEN_ENV_MODE in display.h (the long-press
+    // discriminator depends on this).
+    , screenEnvMode
 };
 
 // Phase H: apply a mode change. Called by the button FSM on multi-press.
@@ -678,10 +683,20 @@ static void displayTask(void* param) {
             if (buttonWasDown) {
                 unsigned long held = nowMs - buttonDownMs;
                 if (held >= 3000) {
-                    // Long press — mute. Clears any pending multi-press
-                    // so a tap-tap-hold sequence doesn't also toggle
-                    // HIGH_ALERT after the mute fires.
-                    alertToggleMute();
+                    // Sprint 7: long-press discriminator. Screen context
+                    // picks the action — env-mode page cycles the mode,
+                    // every other page keeps the existing 3 s mute
+                    // gesture. No upper bound on the hold; a silent
+                    // no-op above 5 s would be user-hostile. The
+                    // pressCount reset is shared across both branches so
+                    // a tap-tap-hold sequence never falls through into
+                    // HIGH_ALERT.
+                    if (currentScreen == SCREEN_ENV_MODE) {
+                        envModeCycle();
+                        lastRenderedScreen = -1;  // force re-render with new mode
+                    } else {
+                        alertToggleMute();
+                    }
                     pressCount = 0;
                 } else if (held >= 1000) {
                     // 1-2.999 s hold — acknowledge current alert.
@@ -794,6 +809,11 @@ void setup() {
     if (bootCount > 1000) bootCount = 0;
     bootCount++;
     Serial.printf("[BOOT] Boot #%u\n", bootCount);
+
+    // Sprint 7: env-mode loaded from NVS before any code reads the
+    // peak-threshold or skip-TTL accessors. Failure here is non-fatal —
+    // the in-memory SUBURBAN default is still active.
+    envModeInit();
 
     printBanner();
 

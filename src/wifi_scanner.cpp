@@ -5,6 +5,7 @@
 #include "alert_handler.h" // Issue 8: alertQueueDropInc()
 #include "cad_scanner.h"   // Issue 1: warmup corroboration markers
 #include "geo_utils.h"     // Sprint 4.5: shared ridDistanceMeters()
+#include "env_mode.h"      // Sprint 7: currentSkipTtlMs()
 #include <Arduino.h>
 #include <esp_wifi.h>
 #include <string.h>
@@ -438,14 +439,15 @@ static void wifiObserveChannel(uint8_t channel, uint32_t durationMs) {
         cs.decodedRidCount == 0 &&
         cs.undecodedOuiCount >= SPRINT6_UNPRODUCTIVE_OUI_MIN_COUNT) {
         const uint32_t nowMs = millis();
-        cs.skipUntilMs = nowMs + SPRINT6_CURRENT_ENV_MODE;
+        const uint32_t ttl   = currentSkipTtlMs();
+        cs.skipUntilMs = nowMs + ttl;
         SERIAL_SAFE(Serial.printf(
             "[SKIP-LEARN] ch=%u undecoded=%u decoded=%u obs_ms=%u -> skip until t+%u ms\n",
             (unsigned)channel,
             (unsigned)cs.undecodedOuiCount,
             (unsigned)cs.decodedRidCount,
             (unsigned)cs.totalObservationsMs,
-            (unsigned)SPRINT6_CURRENT_ENV_MODE));
+            (unsigned)ttl));
         // Establish the skip-anchor on the first skip entry, if not yet set.
         if (!s_skipAnchorValid) {
             if (xSemaphoreTake(stateMutex, pdMS_TO_TICKS(5)) == pdTRUE) {

@@ -8,12 +8,15 @@ static const int SCREEN_WIDTH  = 128;
 static const int SCREEN_HEIGHT = 64;
 
 // Phase J: SCREEN_RID added on every board with a WiFi scanner (all three).
+// Sprint 7: SCREEN_ENV_MODE appended after RID/Spectrum24, on every board.
 // Layout: 0=Dashboard, 1=Spectrum, 2=GPS, 3=Integrity, 4=Threat, 5=System,
-// 6=RID, (LR1121 only) 7=Spectrum24.
+// 6=RID, (LR1121 only) 7=Spectrum24, last=ENV_MODE.
 #ifdef BOARD_T3S3_LR1121
-static const int NUM_SCREENS = 8;
+static const int NUM_SCREENS = 9;
+static const int SCREEN_ENV_MODE = 8;
 #else
-static const int NUM_SCREENS = 7;
+static const int NUM_SCREENS = 8;
+static const int SCREEN_ENV_MODE = 7;
 #endif
 
 // RSSI range for bar chart vertical scaling
@@ -64,6 +67,9 @@ void screenRID(Adafruit_SSD1306& disp, const SystemState& state, int page);
 
 // Screen 7: 2.4 GHz spectrum (LR1121 only)
 void screenSpectrum24(Adafruit_SSD1306& disp, const SystemState& state, int page);
+
+// Sprint 7: Env-Mode page (last in rotation on all boards)
+void screenEnvMode(Adafruit_SSD1306& disp, const SystemState& state, int page);
 
 void drawPageDots(Adafruit_SSD1306& disp, int current, int total);
 

@@ -1,0 +1,69 @@
+[
+  {
+    "id": "1.1",
+    "cmd": "e1f",
+    "desc": "ELRS 200Hz FCC915",
+    "expected": "CRITICAL",
+    "reached": null,
+    "time_to_warning_s": null,
+    "time_to_critical_s": null,
+    "return_clear_s": null,
+    "return_clear_ok": false,
+    "cad_line": "[CAD] cycle=143 subConf=5 sub24Conf=14 fastConf=5 taps=19 div=64 persDiv=64 vel=0 sustainedCycles=141 score=60 fast=60 confirm=0 anchor=902.3MHz SF6 hits=30",
+    "sustainedCycles": "141",
+    "div": "64",
+    "persDiv": "64",
+    "taps": "19",
+    "subConf": "5",
+    "sub24Conf": "14",
+    "confirm": "0",
+    "fast": "60",
+    "anchor": "902.3MHz",
+    "score": "60",
+    "status": "TIMEOUT"
+  },
+  {
+    "id": "1.2",
+    "cmd": "e4f",
+    "desc": "ELRS 25Hz FCC915",
+    "expected": "WARNING",
+    "status": "ABORT_NO_BASELINE"
+  },
+  {
+    "id": "1.3",
+    "cmd": "g",
+    "desc": "Crossfire FSK 150Hz",
+    "expected": "CRITICAL",
+    "status": "ABORT_NO_BASELINE"
+  },
+  {
+    "id": "1.4",
+    "cmd": "k1",
+    "desc": "SiK/MAVLink 64kbps",
+    "expected": "CRITICAL",
+    "reached": null,
+    "time_to_warning_s": null,
+    "time_to_critical_s": null,
+    "return_clear_s": null,
+    "return_clear_ok": false,
+    "cad_line": "[CAD] cycle=222 subConf=4 sub24Conf=18 fastConf=4 taps=24 div=64 persDiv=64 vel=0 sustainedCycles=220 score=60 fast=60 confirm=0 anchor=902.3MHz SF6 hits=16",
+    "sustainedCycles": "220",
+    "div": "64",
+    "persDiv": "64",
+    "taps": "24",
+    "subConf": "4",
+    "sub24Conf": "18",
+    "confirm": "0",
+    "fast": "60",
+    "anchor": "902.3MHz",
+    "score": "60",
+    "status": "TIMEOUT"
+  },
+  {
+    "id": "1.5",
+    "cmd": "l1",
+    "desc": "mLRS 19Hz",
+    "expected": "WARNING",
+    "status": "ABORT_NO_BASELINE"
+  }
+]
